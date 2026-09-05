@@ -4094,30 +4094,6 @@ fn region_channel_ratio(
 }
 
 /// Mean luminance (0..255) of a screen rectangle.
-/// Mean of ONE channel over a region (wave FIX3 audit). [`region_mean`] averages
-/// the three together and [`region_channel_ratio`] divides two of them; a claim
-/// about "how much blue is on those planks" is neither, and a ratio moves with
-/// the room's fill where the channel itself does not.
-fn region_channel_mean(
-    img: &[u8],
-    x: std::ops::Range<u32>,
-    y: std::ops::Range<u32>,
-    ch: usize,
-) -> f32 {
-    let (mut s, mut n) = (0.0f64, 0u32);
-    for yy in y {
-        for xx in x.clone() {
-            s += f64::from(px(img, xx, yy)[ch]);
-            n += 1;
-        }
-    }
-    if n == 0 {
-        0.0
-    } else {
-        (s / f64::from(n)) as f32
-    }
-}
-
 fn region_mean(img: &[u8], x: std::ops::Range<u32>, y: std::ops::Range<u32>) -> f32 {
     let (mut s, mut n) = (0.0f64, 0u32);
     for yy in y {
@@ -4553,28 +4529,25 @@ fn golden_venue_interior() {
     // fill down and the ratio rose to 1.499 with the blue rim entirely intact
     // (left plank B **44.35 → 34.05** against the warm side's 11.10 → 10.21).
     //
-    // So the clause now measures the rim itself: the cool side's BLUE against
-    // the warm side's blue, which is the thing the sentence names and does not
-    // move with the ambient. Measured 4.00× before the audit, 3.33× after, and
-    // one white spot for both lamps collapses it to 1.0.
-    let cool_blue = region_channel_mean(
-        &img,
-        (W * 30 / 100)..(W * 46 / 100),
-        (H * 60 / 100)..(H * 72 / 100),
-        2,
-    );
-    let warm_blue = region_channel_mean(
-        &img,
-        (W * 54 / 100)..(W * 70 / 100),
-        (H * 60 / 100)..(H * 72 / 100),
-        2,
-    );
-    eprintln!("venue_interior: plank blue cool {cool_blue:.2}, warm {warm_blue:.2}");
+    // So the clause now measures the rim itself: BLUE PER UNIT OF RED on the
+    // side that is supposed to be cool, which is what the sentence names and
+    // which the room's fill cannot manufacture. Measured 0.667 here against a
+    // 0.45 floor; the warm side reads 0.178.
+    //
+    // A bare blue MEAN was tried first and is NOT enough: painting BOTH lamps
+    // red still leaves the left planks 2.8× bluer than the right (9.67 against
+    // 3.49), purely because the neon plate is on that side, so a
+    // `cool_blue > 2 * warm_blue` clause passes the very mutation it exists
+    // for. Mutation-verified in this form: with both lamps red the cool side
+    // reads **0.169** against the 0.45 floor.
+    let cool_br = 1.0 / cool.max(1.0e-3);
+    let warm_br = 1.0 / warm.max(1.0e-3);
+    eprintln!("venue_interior: plank blue/red cool {cool_br:.3}, warm {warm_br:.3}");
     assert!(
-        cool_blue > warm_blue * 2.0,
-        "neither lamp lays a cool rim on the planks (blue {cool_blue:.2} against the \
-         warm side's {warm_blue:.2}, and the r/b ratios are {left:.3} / {right:.3}) — \
-         one red key and one blue rim is the reference's whole stage signature"
+        cool_br > 0.45 && cool_br > warm_br * 2.0,
+        "neither lamp lays a cool rim on the planks (blue/red {cool_br:.3} on the cool \
+         side against {warm_br:.3} on the warm one) — one red key and one blue rim is \
+         the reference's whole stage signature"
     );
 
     // ── (c) THE POLE IS BRIGHT. A chrome cylinder in a coloured wash is one
