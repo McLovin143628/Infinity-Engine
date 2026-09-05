@@ -1356,7 +1356,37 @@ fn the_golden_set_is_pinned_and_additive_after_phase_27() {
     // a single multiplier cannot hold because EDIT1 removed a pi from two
     // places and its subject rides both. Mean 0.072099, max 0.242510; every
     // structural assertion it exists for passes on the new frame.
-    const GOLDEN_SET_DIGEST: &str = "1a03e55866b2b76958573b4050651d98";
+    //
+    // **Wave FIX3 moves it again** (from `1a03e55866b2b76958573b4050651d98`), on
+    // the re-bless branch of the rule, and the wave's stated purpose IS the look:
+    // the ambient term every shaded surface in the engine spends stops being the
+    // GI probe field alone and becomes the sky's own irradiance, projected from
+    // the P17 medium, with the probe field added as its signed difference from an
+    // open sky. Measured before it: a white wall's shaded face read 0.0129 of its
+    // sunlit face under a clear noon sky, against the 0.1-0.2 physics gives; the
+    // island's Play frame had a third of the hero below luminance 8.
+    //
+    // **SIX frames move and all six are GI-on scenes**, which is the gate -- the
+    // term is reached only through `GiSettings::enabled`, so the other 56 run the
+    // instruction stream they always did and are byte-identical:
+    //
+    //   gi_bleed         mean 0.1558 / max 0.4919   more colour bleed: the red
+    //                    wall is lit by the sky now, so it has light to bleed
+    //   gi_terrain       0.0715 / 0.2930            the bounce carries a cosine
+    //   gi_specular      0.0536 / 0.2940            the sky reflects again
+    //   gi_emissive      0.0495 / 0.3170
+    //   venue_interior   0.0426 / 0.3347            the room got DARKER (its far
+    //                    corner 4.2 -> 2.0): the probe field's `-sky` term takes
+    //                    back exactly the sky a closed room blocks
+    //   gi_scatter_neon  0.0261 / 0.2783
+    //
+    // The last four are inside the harness's perceptual tolerance and are
+    // re-blessed anyway, for the reason `golden.rs` states: a frame that no
+    // longer depicts what the engine draws is a frame nobody can read a
+    // regression off. `GOLDENS` does not move. The whole table, with the arms'
+    // own before/after numbers, is in `docs/memos/island-progress.md` under
+    // *Wave FIX3*.
+    const GOLDEN_SET_DIGEST: &str = "f7310588fca598ba368e4d2aaa89dc83";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

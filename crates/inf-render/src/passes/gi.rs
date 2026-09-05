@@ -1548,9 +1548,8 @@ mod boundary_tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(
-                tail.contains("gi_irradiance("),
-                "{label}: the scanned region holds no GI call, so the ban below \
-                 is about nothing"
+                tail.contains("ambient_irradiance("),
+                "{label}: the scanned region holds no ambient call, so the ban below is about nothing"
             );
             for banned in ["shadow_factor", "vsm_light_shadow", "vsm_shadow("] {
                 assert!(
@@ -1570,6 +1569,65 @@ mod boundary_tests {
                  shader that has nothing to keep out of its ambient term"
             );
         }
+
+        // **AND THE PLACE THE AMBIENT IS NOW COMPUTED** (wave FIX3). The six lit
+        // passes used to spell the composition inline — `amb = gi_irradiance(..)`
+        // — and the scan above was over the region that held it. They spell it as
+        // one call now (`ambient_irradiance`), so the region above proves only
+        // that the CALL SITE takes no shadow and the ban has to follow the
+        // arithmetic into `env_lighting.wgsl`. Three functions: the composition,
+        // the sky term and the probe term.
+        let env = include_str!("../shaders/env_lighting.wgsl");
+        let mut scanned = 0usize;
+        for sig in [
+            "fn ambient_irradiance(",
+            "fn sky_irradiance(",
+            "fn gi_indirect(",
+        ] {
+            let at = env
+                .find(sig)
+                .unwrap_or_else(|| panic!("env_lighting.wgsl: no `{sig}`"));
+            let open = env[at..]
+                .find('{')
+                .expect("a signature is followed by a brace")
+                + at;
+            let mut depth = 0usize;
+            let mut end = open;
+            for (i, c) in env[open..].char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = open + i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body: String = env[open..end]
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                body.len() > 40,
+                "env_lighting.wgsl: `{sig}` extracted as {} bytes — the extraction is broken",
+                body.len()
+            );
+            for banned in ["shadow_factor", "vsm_light_shadow", "vsm_shadow("] {
+                assert!(
+                    !body.contains(banned),
+                    "env_lighting.wgsl's `{sig}` applies `{banned}` to the ambient term — a virtual shadow page is camera-driven residency, and the irradiance at a fixed world point must not be a function of where the viewer is standing (the P18 law, from the other side)"
+                );
+            }
+            scanned += 1;
+        }
+        assert_eq!(
+            scanned, 3,
+            "the ambient composition is not three functions any more"
+        );
     }
 }
 
