@@ -236,7 +236,9 @@ fn every_light_the_editor_pushes_is_behind_a_visibility_check() {
     let code: String = VIEWPORT.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         code.contains("if let Some(vol) = w.get::<PcgVolume>(entity).filter(|_| visible) {"),
-        "the editor viewport's `PcgVolume` branch is no longer visibility-gated,          so a hidden venue volume keeps its rig lit in the viewport and loses it          in PIE"
+        "the editor viewport's `PcgVolume` branch is no longer visibility-gated, \
+          so a hidden venue volume keeps its rig lit in the viewport and loses it \
+          in PIE"
     );
     assert!(
         code.contains("if let Some(light) = w.get::<Light>(entity) { if visible {"),
@@ -246,6 +248,7 @@ fn every_light_the_editor_pushes_is_behind_a_visibility_check() {
     let player: String = PLAYER.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         player.contains("if !visible { continue; }"),
-        "the shipped player's projection loop no longer skips invisible entities,          so the claim the editor is measured against is gone"
+        "the shipped player's projection loop no longer skips invisible entities, \
+          so the claim the editor is measured against is gone"
     );
 }

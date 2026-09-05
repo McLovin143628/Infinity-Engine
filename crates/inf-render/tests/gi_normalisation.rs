@@ -554,7 +554,8 @@ fn dynamic_gi_lights_a_daylight_street_rather_than_washing_it_out() {
     // nothing at all.
     assert!(
         (p95_on - p95_off).abs() > 1.0,
-        "switching dynamic GI on moved this street's p95 by {:.2} levels — the \n         ceilings above would be met by a renderer with no GI in it",
+        "switching dynamic GI on moved this street's p95 by {:.2} levels — the \
+          ceilings above would be met by a renderer with no GI in it",
         p95_on - p95_off
     );
 }
