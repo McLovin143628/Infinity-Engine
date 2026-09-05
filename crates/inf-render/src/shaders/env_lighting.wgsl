@@ -180,7 +180,7 @@ fn sh_basis(d: vec3<f32>) -> vec4<f32> {
 /// RGB triples in a 3×4 matrix (`[c0, c1, c2, c3]` in columns). Both the diffuse
 /// irradiance and the P18.4 specular reconstruction start here, so the 8-tap fetch
 /// is written once.
-fn gi_fetch_sh(world_pos: vec3<f32>) -> mat4x3<f32> {
+fn gi_fetch_sh(world_pos: vec3<f32>, n: vec3<f32>) -> mat4x3<f32> {
     let pmin = gi.probe_min.xyz;
     let extent = gi.probe_min.w;
     let pd = vec3<f32>(gi.dims.y, gi.dims.z, gi.dims.w);
@@ -192,6 +192,13 @@ fn gi_fetch_sh(world_pos: vec3<f32>) -> mat4x3<f32> {
     var c1 = vec3<f32>(0.0);
     var c2 = vec3<f32>(0.0);
     var c3 = vec3<f32>(0.0);
+    // The same blend restricted to probes that are not buried inside geometry,
+    // and the weight it accumulated — see below.
+    var v0 = vec3<f32>(0.0);
+    var v1 = vec3<f32>(0.0);
+    var v2 = vec3<f32>(0.0);
+    var v3 = vec3<f32>(0.0);
+    var vw = 0.0;
     let maxc = vec3<i32>(pd) - vec3<i32>(1);
     for (var i = 0; i < 8; i = i + 1) {
         let off = vec3<f32>(f32(i & 1), f32((i >> 1) & 1), f32((i >> 2) & 1));
@@ -199,10 +206,49 @@ fn gi_fetch_sh(world_pos: vec3<f32>) -> mat4x3<f32> {
         let weight = w.x * w.y * w.z;
         let gc = clamp(vec3<i32>(base + off), vec3<i32>(0), maxc);
         let flat = u32((gc.z * i32(pd.y) + gc.y) * i32(pd.x) + gc.x) * 4u;
-        c0 = c0 + weight * gi_sh[flat + 0u].rgb;
-        c1 = c1 + weight * gi_sh[flat + 1u].rgb;
-        c2 = c2 + weight * gi_sh[flat + 2u].rgb;
-        c3 = c3 + weight * gi_sh[flat + 3u].rgb;
+        let s0 = gi_sh[flat + 0u];
+        let s1 = gi_sh[flat + 1u].rgb;
+        let s2 = gi_sh[flat + 2u].rgb;
+        let s3 = gi_sh[flat + 3u].rgb;
+        c0 = c0 + weight * s0.rgb;
+        c1 = c1 + weight * s1;
+        c2 = c2 + weight * s2;
+        c3 = c3 + weight * s3;
+        // `w` of the first coefficient is the probe's **validity**, written by
+        // `gi_probes.wgsl`: zero when the probe stands inside solid geometry.
+        //
+        // …times the **backface weight**: a probe on the far side of the
+        // surface's own plane is a probe in the next room. The ceiling of a
+        // sealed hall is the case — its nearest probe vertically is the one
+        // floating in the open sky above the roof, which the plain blend gave
+        // 72 % of the weight, and that is light arriving through a slab.
+        // `max(dot(., n), 0)` is the standard irradiance-volume weight; the
+        // probe's own cell is never fully behind a surface inside it, so a
+        // surface with no probe in front of it falls through to the plain blend
+        // below rather than going black.
+        let probe_pos = pmin + (base + off) * (extent / max(pd - 1.0, vec3<f32>(1.0)));
+        let to_probe = probe_pos - world_pos;
+        let facing = max(dot(normalize(to_probe + n * 1.0e-4), n), 0.0);
+        let vwi = weight * s0.w * facing;
+        v0 = v0 + vwi * s0.rgb;
+        v1 = v1 + vwi * s1;
+        v2 = v2 + vwi * s2;
+        v3 = v3 + vwi * s3;
+        vw = vw + vwi;
+    }
+    // **BURIED PROBES DO NOT VOTE** (wave FIX3 audit). A probe inside a wall
+    // marched every ray into that wall, so what it reports is the inside of a
+    // brick — and the trilinear blend gave it a corner's worth of weight over
+    // every surface near it regardless. Measured: on `sky_ambient.rs`'s wall a
+    // buried probe carried 87 % of the shaded face's fetch.
+    //
+    // When every corner is buried there is no opinion to be had and the plain
+    // blend stands, because a zero here would read as black rather than as
+    // "unknown" — and the eight-buried case is a surface inside solid geometry,
+    // which is not visible anyway.
+    if (vw > 1.0e-5) {
+        let inv = 1.0 / vw;
+        return mat4x3<f32>(v0 * inv, v1 * inv, v2 * inv, v3 * inv);
     }
     return mat4x3<f32>(c0, c1, c2, c3);
 }
@@ -250,7 +296,7 @@ fn gi_fetch_sh(world_pos: vec3<f32>) -> mat4x3<f32> {
 // their authored `intensity`, which is itself the proof that the change is
 // exactly a scale and touches nothing else.
 fn gi_indirect(world_pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    let c = gi_fetch_sh(world_pos);
+    let c = gi_fetch_sh(world_pos, n);
     let b = sh_basis(n);
     // Cosine-lobe convolution (Ramamoorthi) with the Lambert 1/π folded in:
     // A0/π = 1, A1/π = 2/3.
@@ -564,7 +610,7 @@ fn gi_specular(world_pos: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rough: f32, f0:
     // probe fetch point; v2 fetches the colour itself and blends it over this
     // term as the fallback (`gi_ambient_specular`). Keeping both would apply the
     // parallax twice.
-    let c = gi_fetch_sh(world_pos);
+    let c = gi_fetch_sh(world_pos, n);
     // A rough surface integrates the lobe away; a smooth one keeps it.
     let lobe = clamp(1.0 - rough, 0.0, 1.0);
     // **The sky half is explicit since wave FIX3.** The probe field no longer

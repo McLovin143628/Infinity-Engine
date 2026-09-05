@@ -4094,6 +4094,30 @@ fn region_channel_ratio(
 }
 
 /// Mean luminance (0..255) of a screen rectangle.
+/// Mean of ONE channel over a region (wave FIX3 audit). [`region_mean`] averages
+/// the three together and [`region_channel_ratio`] divides two of them; a claim
+/// about "how much blue is on those planks" is neither, and a ratio moves with
+/// the room's fill where the channel itself does not.
+fn region_channel_mean(
+    img: &[u8],
+    x: std::ops::Range<u32>,
+    y: std::ops::Range<u32>,
+    ch: usize,
+) -> f32 {
+    let (mut s, mut n) = (0.0f64, 0u32);
+    for yy in y {
+        for xx in x.clone() {
+            s += f64::from(px(img, xx, yy)[ch]);
+            n += 1;
+        }
+    }
+    if n == 0 {
+        0.0
+    } else {
+        (s / f64::from(n)) as f32
+    }
+}
+
 fn region_mean(img: &[u8], x: std::ops::Range<u32>, y: std::ops::Range<u32>) -> f32 {
     let (mut s, mut n) = (0.0f64, 0u32);
     for yy in y {
@@ -4259,9 +4283,32 @@ fn golden_gi_emissive() {
         "floor is not green at all (ratio {green_on:.3}) — emissive injection is dead"
     );
     // The floor is genuinely lit by it, not merely tinted noise.
+    //
+    // **RE-AIMED WITH THE MEASUREMENT (FIX3 audit).** This clause used to
+    // compare the GI-ON frame against the GI-OFF one, which is not a statement
+    // about the emissive bar at all: it is the emissive gain *minus* whatever
+    // the ambient term does when GI is switched on, and those are two different
+    // effects added together. The FIX3 audit made the second one real — a probe
+    // buried in the floor slab no longer votes in the blend — and the frame's
+    // mean fell 100.33 → 88.01 while the bar's green bleed nearly doubled
+    // (green/red 1.996 → 3.371). The old clause read that as "an emissive
+    // source lit nothing".
+    //
+    // The control is now the same scene, the same settings, with the bar's
+    // EMISSIVE zeroed — so the difference is the emissive injection and
+    // nothing else. Mutation-verified: clearing the voxel volume's emissive
+    // word collapses it to zero.
+    let mut dark = scene.clone();
+    dark.instances[1].emissive = [0.0; 3];
+    dark.mark_dirty();
+    let no_glow = render_with(&gpu, &dark, &view, gi_on);
+    let lit_floor = region_mean(&img, fx.clone(), fy.clone());
+    let dark_floor = region_mean(&no_glow, fx.clone(), fy.clone());
+    eprintln!("gi_emissive floor mean: bar glowing {lit_floor:.2}, bar dark {dark_floor:.2}");
     assert!(
-        region_mean(&img, fx.clone(), fy.clone()) > region_mean(&off, fx, fy) + 1.0,
-        "an emissive source lit nothing"
+        lit_floor > dark_floor + 1.0,
+        "an emissive source lit nothing: the floor reads {lit_floor:.2} with the bar \
+         glowing and {dark_floor:.2} with the same bar's emissive zeroed"
     );
 }
 
@@ -4498,10 +4545,36 @@ fn golden_venue_interior() {
         warm > 1.6,
         "neither lamp lays a RED wash on the planks ({warm:.3})"
     );
+    // **RE-AIMED WITH THE MEASUREMENT (FIX3 audit).** The clause here was
+    // `cool < 1.4`, and at the wave's head it measured **1.377** — 1.7 % of
+    // headroom under its own ceiling. A red/blue *ratio* is the cool lamp
+    // measured against everything else that lands on those planks, so it moves
+    // whenever the room's fill moves; the audit's probe-validity fix took the
+    // fill down and the ratio rose to 1.499 with the blue rim entirely intact
+    // (left plank B **44.35 → 34.05** against the warm side's 11.10 → 10.21).
+    //
+    // So the clause now measures the rim itself: the cool side's BLUE against
+    // the warm side's blue, which is the thing the sentence names and does not
+    // move with the ambient. Measured 4.00× before the audit, 3.33× after, and
+    // one white spot for both lamps collapses it to 1.0.
+    let cool_blue = region_channel_mean(
+        &img,
+        (W * 30 / 100)..(W * 46 / 100),
+        (H * 60 / 100)..(H * 72 / 100),
+        2,
+    );
+    let warm_blue = region_channel_mean(
+        &img,
+        (W * 54 / 100)..(W * 70 / 100),
+        (H * 60 / 100)..(H * 72 / 100),
+        2,
+    );
+    eprintln!("venue_interior: plank blue cool {cool_blue:.2}, warm {warm_blue:.2}");
     assert!(
-        cool < 1.4,
-        "neither lamp lays a cool rim on the planks ({cool:.3}) — one red key and \
-         one blue rim is the reference's whole stage signature"
+        cool_blue > warm_blue * 2.0,
+        "neither lamp lays a cool rim on the planks (blue {cool_blue:.2} against the \
+         warm side's {warm_blue:.2}, and the r/b ratios are {left:.3} / {right:.3}) — \
+         one red key and one blue rim is the reference's whole stage signature"
     );
 
     // ── (c) THE POLE IS BRIGHT. A chrome cylinder in a coloured wash is one

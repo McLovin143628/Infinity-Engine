@@ -1386,7 +1386,42 @@ fn the_golden_set_is_pinned_and_additive_after_phase_27() {
     // regression off. `GOLDENS` does not move. The whole table, with the arms'
     // own before/after numbers, is in `docs/memos/island-progress.md` under
     // *Wave FIX3*.
-    const GOLDEN_SET_DIGEST: &str = "f7310588fca598ba368e4d2aaa89dc83";
+    //
+    // **The FIX3 AUDIT moves it once more** (from
+    // `f7310588fca598ba368e4d2aaa89dc83`), on the same re-bless branch of the
+    // same rule, and again the stated purpose IS the look. The paragraph above
+    // says the `-sky` term "takes back exactly the sky a closed room blocks".
+    // Measured, it did not: `inf-render/tests/interior_ambient.rs` photographs a
+    // SEALED 24x24x12 m hall -- no door, no window, the sun outside -- and its
+    // three faces summed to **0.4307** against a DOORED hall's 0.4348, i.e.
+    // **99 %** of the light of a room that has an opening. Two mechanisms, both
+    // closed by the audit:
+    //
+    //   * the probe march lit every surface it hit with the UNOCCLUDED sky, so
+    //     an interior wall bounced daylight it cannot see. The sky half of that
+    //     bounce is now scaled by the probe's own upward sky-view factor, which
+    //     is 0 in a sealed room and 1 on open ground.
+    //   * a probe standing INSIDE a wall or a floor slab still voted in the
+    //     trilinear blend -- 87 % of the weight for the shaded face
+    //     `sky_ambient.rs` is about -- and the blend reached through ceilings.
+    //     Buried probes no longer vote and the blend carries the receiver's own
+    //     normal.
+    //
+    // The sealed hall now reads **0.0004** against the doored hall's 0.0059, and
+    // the outdoor reading the wave was written for holds and improves:
+    // shaded:sunlit **0.1838 -> 0.2151** against a physical 0.1-0.35, with the
+    // far row unchanged at 0.2867 and the furnace unchanged at 1.0096.
+    //
+    // **THREE frames move**, all of them GI-on:
+    //
+    //   venue_interior   mean 0.0189 / max 0.4381   stage 45.50 -> 40.35, and
+    //                    the far corner is UNMOVED at 1.97
+    //   gi_emissive      0.0629 / 0.1567            the bar's green bleed nearly
+    //                    doubles, green/red 1.996 -> 3.371
+    //   gi_scatter_neon  0.0369 / 0.3564
+    //
+    // `gi_bleed`, `gi_terrain` and `gi_specular` are byte-identical through it.
+    const GOLDEN_SET_DIGEST: &str = "51c225fa4f1afc63d4fafd5ff3f31d46";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

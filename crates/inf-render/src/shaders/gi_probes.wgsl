@@ -185,16 +185,44 @@ fn cs_probes(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dim = gi.dims.x;
     let rays = u32(gi.params.z);
 
+    // **IS THIS PROBE INSIDE SOMETHING?** (wave FIX3 audit.) A probe buried in a
+    // wall, a floor slab or the ground marches every one of its rays into the
+    // solid it is standing in: it reports the inside of a brick and it is still
+    // one of the eight corners the trilinear fetch blends for every surface near
+    // it. Measured on `sky_ambient.rs`'s own fixture: the probe grid at 40 m /
+    // 16x8x16 puts a probe at z = -0.667 inside a wall whose face is at
+    // z = -1.0, and that buried probe carries **87 %** of the fetch weight for
+    // the shaded face the whole file is about.
+    //
+    // The flag rides the unused `w` lane of the probe's first coefficient, so it
+    // costs no memory and no bandwidth, and `gi_fetch_sh` drops those corners
+    // from the blend — falling back to the plain blend when every corner is
+    // buried, because "no opinion" must not read as "black".
+    let probe_valid = select(1.0, 0.0, sample_point(origin).solid > 0.5);
+
     var c0 = vec3<f32>(0.0);
     var c1 = vec3<f32>(0.0);
     var c2 = vec3<f32>(0.0);
     var c3 = vec3<f32>(0.0);
+    // The SKY-LIT half of the bounce, projected separately (wave FIX3 audit).
+    // It is folded into `c0..c3` after the loop, scaled by how much sky this
+    // probe's own neighbourhood can actually see — see `sky_view` below.
+    var s0 = vec3<f32>(0.0);
+    var s1 = vec3<f32>(0.0);
+    var s2 = vec3<f32>(0.0);
+    var s3 = vec3<f32>(0.0);
+    // The probe's own **upward sky-view factor**, accumulated from the rays it
+    // is already casting: the cosine-weighted fraction of the upper hemisphere
+    // in which the sky is reachable. See `sky_view` after the loop.
+    var sky_open = 0.0;
+    var sky_total = 0.0;
 
     for (var r = 0u; r < rays; r = r + 1u) {
         let dir = spiral_dir(r, rays);
         // March the ray through the volume.
         var pos = origin + dir * vsize * 0.5;
         var radiance = vec3<f32>(0.0);
+        var sky_lit = vec3<f32>(0.0);
         var hit = false;
         let steps = i32(dim) * 2;
         for (var s = 0; s < steps; s = s + 1) {
@@ -240,11 +268,27 @@ fn cs_probes(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // grazing incidence, and it is what finally puts the **cosine**
                 // on the sun term — EDIT1's carried "GI bounce has no n·l",
                 // closed here with the same proxy that pays for the sky.
+                //
+                // **The sky the hit surface receives is not the whole sky**
+                // (wave FIX3 audit). `sky_irradiance(nh)` is the *unoccluded*
+                // hemisphere, and an interior wall does not stand under it.
+                // Measured, before this split, in `tests/interior_ambient.rs`:
+                // a sealed 24 x 24 x 12 m hall — no door, no window, sun
+                // outside — read its three faces at 0.4307 against a doored
+                // hall's 0.4348, i.e. **99 %** of the light of a room that has
+                // an opening, with no opening at all. In the limit it is
+                // arithmetic: for a closed box of albedo `a` under a uniform
+                // sky `L`, each hit contributes `a*L - L` and the consumer adds
+                // `L`, leaving `a*L` where the answer is zero.
+                //
+                // So the sky-lit half of the bounce is accumulated separately
+                // and scaled after the loop by the probe's own sky-view
+                // fraction. It stays here, unscaled, in `sky_lit`.
                 let nh = -dir;
                 let ndl = max(dot(nh, normalize(gi.sun_dir.xyz)), 0.0);
-                let incident = gi.sun_color.rgb * vis * ndl * (1.0 / PI)
-                    + max(sky_irradiance(nh), vec3<f32>(0.0));
-                radiance = v.albedo * incident + v.emissive;
+                let direct = gi.sun_color.rgb * vis * ndl * (1.0 / PI);
+                radiance = v.albedo * direct + v.emissive;
+                sky_lit = v.albedo * max(sky_irradiance(nh), vec3<f32>(0.0));
                 hit = true;
                 break;
             }
@@ -265,22 +309,60 @@ fn cs_probes(@builtin(global_invocation_id) gid: vec3<u32>) {
         // which is the same integral the pre-FIX3 gather computed, to the
         // quadrature — occlusion intact, nothing counted twice — and it is the
         // reason `gi_indirect` is no longer clamped at zero: a probe inside a
-        // closed room legitimately gathers `-sky` in nearly every direction.
+        // closed room gathers `-sky` in nearly every direction, and the sum is
+        // the bounce that is really there.
+        let up_weight = max(dir.y, 0.0);
+        sky_total = sky_total + up_weight;
         if (hit) {
             radiance = radiance - gi_sky_radiance(dir);
         } else {
             radiance = vec3<f32>(0.0);
+            sky_open = sky_open + up_weight;
         }
         let b = sh_basis(dir);
         c0 = c0 + radiance * b.x;
         c1 = c1 + radiance * b.y;
         c2 = c2 + radiance * b.z;
         c3 = c3 + radiance * b.w;
+        s0 = s0 + sky_lit * b.x;
+        s1 = s1 + sky_lit * b.y;
+        s2 = s2 + sky_lit * b.z;
+        s3 = s3 + sky_lit * b.w;
     }
+
+    // **THE SKY-VIEW FACTOR** (wave FIX3 audit). How much sky the surfaces
+    // around this probe can actually see — estimated from the rays this probe
+    // has already cast, so it costs four registers and no extra march.
+    //
+    // The **upper hemisphere**, cosine-weighted, and not the whole sphere: a
+    // probe standing on open ground has half its rays miss, but the ground
+    // beneath it sees the *whole* sky, and an estimator built on the whole
+    // sphere reads 0.5 there and halves every outdoor bounce in the engine
+    // (measured: it drops `sky_ambient.rs`'s shaded wall from 0.1838 to
+    // 0.0299, below the GI-off reading). Weighting by `max(dir.y, 0)` asks the
+    // question the surfaces care about — *is there sky overhead* — and is exact
+    // at both ends:
+    //
+    // ```text
+    //     sealed room     no upward ray escapes    -> 0  -> the room is dark
+    //     open ground     every upward ray escapes -> 1  -> the sky bounces
+    //     beside a wall   the wall is beside, not overhead -> ~1
+    //     street canyon   a strip of sky overhead  -> ~0.6
+    // ```
+    //
+    // It is an approximation in between, and it is the *probe's* view rather
+    // than the hit surface's: an arcade open at the side but roofed overhead
+    // reads 0 where its columns really do see sky sideways. Carried, with the
+    // number, in the ledger.
+    let sky_view = select(0.0, sky_open / sky_total, sky_total > 1.0e-6);
+    c0 = c0 + s0 * sky_view;
+    c1 = c1 + s1 * sky_view;
+    c2 = c2 + s2 * sky_view;
+    c3 = c3 + s3 * sky_view;
 
     let norm = 4.0 * PI / f32(max(rays, 1u));
     let base = pi * 4u;
-    sh[base + 0u] = vec4<f32>(c0 * norm, 0.0);
+    sh[base + 0u] = vec4<f32>(c0 * norm, probe_valid);
     sh[base + 1u] = vec4<f32>(c1 * norm, 0.0);
     sh[base + 2u] = vec4<f32>(c2 * norm, 0.0);
     sh[base + 3u] = vec4<f32>(c3 * norm, 0.0);
