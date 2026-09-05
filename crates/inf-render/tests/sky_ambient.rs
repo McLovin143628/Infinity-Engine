@@ -32,7 +32,7 @@
 //! **The readings are inverted back to scene radiance before the ratio is
 //! taken.** ACES is not linear, so a ratio of 8-bit codes is a ratio of nothing;
 //! [`Ladder`] measures the post chain's own radiance→code curve with a
-//! full-screen emitter at fourteen known radiances and inverts each face
+//! full-screen emitter at sixteen known radiances and inverts each face
 //! reading through it. Bloom, TAA and flare are off in this fixture precisely so
 //! that the chain is a per-pixel function and one curve serves every frame.
 //!
@@ -264,7 +264,7 @@ fn patch(rgba: &[u8]) -> f64 {
 struct Ladder(Vec<(f64, f64)>);
 
 impl Ladder {
-    /// A black, fully-rough emitter filling the frame at each of fourteen
+    /// A black, fully-rough emitter filling the frame at each of sixteen
     /// radiances. Emissive is added after the BRDF and before the tonemap, so
     /// the patch reads exactly that radiance through exactly the shipped chain.
     fn measure(gpu: &GpuContext) -> Self {

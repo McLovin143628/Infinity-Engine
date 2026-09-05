@@ -730,8 +730,7 @@ pub fn gradient_radiance(horizon: [f32; 3], zenith: [f32; 3], dir: [f32; 3]) -> 
 /// target is an **L1** set — four coefficients, which a much coarser quadrature
 /// than this already resolves. Forty-eight is the same count `GiSettings::rays`
 /// defaults to, chosen so that the two ambient sources in this engine sample the
-/// sphere at the same density, and measured (`sky_sh_converges`) to be within
-/// 0.4 % of a 512-direction reference.
+/// sphere at the same density.
 pub const SKY_SH_DIRECTIONS: u32 = 48;
 
 /// March steps for [`sky_irradiance_sh`]'s per-direction integral, and for the
@@ -739,9 +738,15 @@ pub const SKY_SH_DIRECTIONS: u32 = 48;
 ///
 /// Far below the LUT bake's 32/40: an L1 projection averages 48 directions
 /// together, so a per-direction bias that a single sky pixel would show as
-/// banding is invisible after the integral. Measured against the bake's own step
-/// counts in `sky_sh_converges`: 0.6 % on the DC term, for **a twelfth** of the
-/// arithmetic.
+/// banding is invisible after the integral.
+///
+/// **What the whole quadrature costs, measured** (`sky_sh_converges`, which
+/// compares the shipped 48/12/8 projection against a 512-direction reference at
+/// the bake's own 32/40 steps): the DC term lands at
+/// `[0.5569, 0.6842, 0.8728]` against `[0.5701, 0.6925, 0.8634]` — **2.3 %,
+/// 1.2 % and 1.1 %** per channel, and blue is high where red is low, so it is a
+/// quadrature residue rather than a bias. For roughly **a fortieth** of the
+/// arithmetic (48×12×8 against 512×32×40). The arm's ceiling is 5 %.
 const SKY_SH_MARCH_STEPS: u32 = 12;
 const SKY_SH_TRANSMITTANCE_STEPS: u32 = 8;
 
@@ -1488,9 +1493,11 @@ mod tests {
     }
 
     /// **The price.** The projection runs once per frame on the render thread,
-    /// so it is a budget line and not a free lunch. Ten microseconds is two
-    /// thousandths of a 60 Hz frame; the measured figure is printed so the
-    /// ledger quotes a number rather than an adjective.
+    /// so it is a budget line and not a free lunch. Measured here at **0.095 ms**
+    /// — 0.6 % of a 60 Hz frame, and memoized on the exact bits of everything the
+    /// integral reads, so a frame whose sun has not moved pays none of it. The
+    /// ceiling is 2 ms, two orders above the reading, because this arm exists to
+    /// catch a march that grew by a factor rather than to police a percent.
     #[test]
     fn sky_sh_is_cheap() {
         let p = earth();
