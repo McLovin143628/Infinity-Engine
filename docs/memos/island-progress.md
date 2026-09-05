@@ -34227,3 +34227,194 @@ as it stands.
     `--pack` registry arm (47), the unmeasured wire cost of a scatter kind's mesh
     (48) and the NIL-guid audio command a shipped island boot issues (49) are
     untouched by this wave and stand as written.
+
+### Audit — adversarial, 2026-09-05, at `07f862f9` on the same machine and adapter
+
+The wave's headline table reproduces digit for digit: `sky_ambient.rs` at head
+prints 0.0965 / **0.1838** / 0.2867 / 0.1848 with the dark-sky control 0.0576;
+the furnace is 1.0096; the sky-SH projection costs **0.0959 ms** against the
+claimed 0.095 and lands 2.3 % / 1.2 % / 1.1 % from a 512-direction reference;
+the goldens are 62 and exactly the six named ones had moved; schema v27, payload
+13, `EXPECTED_LEVELS` 24, no manifest and no `.inf_lvl` in the range. The demo
+frames reproduce too: measured off the committed PNGs with my own crop, the
+editor viewport's p25 goes 31.00 → 35.00, embedded PIE 9.93 → 25.47 and 60.14 →
+69.26, `frac < 8` 0.2017 → 0.0006, and the hero's body p25 **7.00 → 90.97** with
+`frac < 8` 0.2530 → 0.0000.
+
+What follows is what the wave's instrument could not see, because it
+photographs a wall standing in the **open**.
+
+#### THE FINDING — a sealed room reads 99 % of a doored one
+
+`crates/inf-render/tests/interior_ambient.rs` is the indoor half of
+`sky_ambient.rs`: white Lambert boxes under the same 40° sun and the same P17
+atmosphere, sealed / doored / open, every shot from one eye so the
+camera-centred probe volume never moves between two readings, every reading
+inverted through the same post-chain ladder.
+
+    hall 24x24x12, GI on    ceiling    wall     floor   summed   sealed:doored
+      at e8451338  sealed    0.3651   0.0000   0.0116   0.3767      0.977
+                   doored    0.3704   0.0000   0.0151   0.3855
+      at 07f862f9  sealed    0.2627   0.0906   0.0774   0.4307      0.991
+                   doored    0.2627   0.0906   0.0815   0.4348
+      after this   sealed    0.0004   0.0000   0.0000   0.0004      0.071
+        audit      doored    0.0023   0.0000   0.0036   0.0059
+
+A room with no door, no window and the sun outside read **99 % of the light of
+the same room with a 6 × 5 m doorway**. Both shader files said the opposite in
+prose — *"a probe inside a closed room gathers `-sky` in nearly every direction,
+and the sum is the small bounce that is really there"* — and it had never been
+measured indoors. The defect predates the wave (0.977 at `e8451338`); the wave
+multiplied its magnitude **14×** on the two faces the probe grid actually
+samples (0.0116 → 0.168 summed over wall and floor).
+
+Two mechanisms, both closed:
+
+1. **The bounce was lit by the unoccluded sky.** The march gave every surface a
+   ray hit `sky_irradiance(nh)` — the whole hemisphere — whether or not that
+   surface stands under it. In the limit it is arithmetic: a closed box of
+   albedo `a` under a uniform sky `L` contributes `a·L − L` per hit and the
+   consumer adds `L`, leaving `a·L` where the answer is zero. The sky half of
+   the bounce is now accumulated separately and scaled by the probe's own
+   **upward sky-view factor**, the cosine-weighted fraction of the upper
+   hemisphere in which one of the rays it is already casting escapes: 0 in a
+   sealed room, 1 on open ground, and free. The **upper** hemisphere and not the
+   whole sphere, because a whole-sphere estimator reads 0.5 on open ground and
+   halves every outdoor bounce in the engine — measured: the shaded wall falls
+   to **0.0299**, below the GI-off reading.
+2. **Probes buried in geometry voted, and the blend reached through ceilings.**
+   Carried 53, scoped by the wave and not taken. It is measurable on the wave's
+   OWN fixture: the 40 m / 16×8×16 grid puts a probe at z = −0.667 inside a wall
+   whose face is at z = −1.0, and that buried probe carries **87 %** of the
+   fetch weight for the shaded face `sky_ambient.rs` exists to measure. A probe
+   inside solid now writes validity 0 into the unused `w` lane of its first
+   coefficient; `gi_fetch_sh` drops those corners and weights the rest by the
+   receiver's own normal, falling back to the plain blend when no probe is both
+   valid and in front.
+
+**The outdoor reading the wave was written for holds and improves:**
+
+    configuration                    at 07f862f9   after audit   physical band
+    atmosphere, GI off, near 18 m       0.0965        0.0965      0.07 - 0.35
+    atmosphere, GI on,  near 18 m       0.1838        0.2151
+    atmosphere, GI on,  far  60 m       0.2867        0.2867
+    daylight gradient, GI on,  near     0.1848        0.1891
+    engine-default dark sky (control)   0.0576        0.0839
+
+Furnace 1.0096 → 1.0096. `gi_normalisation`'s daylight street: the GI-on lift is
+−4.9 → −5.0 at intensity 1 and +13.1 → **+3.3** at intensity π.
+
+Mutation-verified three ways, each restored: `sky_view = 1.0` fails the
+sealed-room arm at 0.98; the normal weight at 1.0 fails it at 0.97;
+`probe_valid = 1.0` moves two goldens under `INF_GOLDEN_STRICT=1`.
+
+**Cost, A/B in one session on this machine** (the fps instrument's absolute rows
+are not comparable across sessions — see below):
+
+    1080p                      07f862f9    after audit
+    shipped p95                 22.524       22.504
+    LIT p95                     33.043       33.337     (+0.29)
+    LIT GPU frame               15.133       15.627     (+0.49)
+
+Round-to-round spread within one run is 0.9 ms of p95, so the fetch's extra
+eight normalizes and dots are at or below the noise floor of the instrument that
+measures them.
+
+#### What the wave got right, and the numbers behind it
+
+* **It was never a host difference.** The 24-level field-for-field arm is real:
+  it compares `RenderSettings` with `PartialEq` plus the tier and carries an
+  anti-vacuity clause. Mutation-verified here — doubling `gi.intensity` on the
+  editor side of the comparison fails it on the first level it reaches.
+* **One door.** `ambient_irradiance` is called by exactly **six** lit shaders
+  (`mesh`, `skinned_mesh`, `scatter_mesh`, `terrain`, `vgeom_mesh`,
+  `vis_resolve`) and by nothing else, and its clamp is armed:
+  removing `max(…, 0.0)` fails `venue_interior` at mean 0.0212 / max 0.808.
+* **The venue-rig visibility fix.** Removing `.filter(|_| visible)` from
+  `host.rs` fails `every_light_the_editor_pushes_is_behind_a_visibility_check`,
+  and its repaired assert message renders correctly.
+* **The two sky sources agree far better than the claimed 0.5 %.** The sealed
+  hall is the exact instrument: with the bounce's sky scaled away, what is left
+  is the CPU's 48-direction L1 projection minus the GPU sky-view LUT integrated
+  over the probe's rays. It reads **0.0004** against an open courtyard's 0.52 —
+  0.08 % — at the shipped `rays = 48`, and 0.0011 (0.21 %) at the `rays = 64`
+  the GI goldens author. Carried 56's *"not zero and not measured"* is measured.
+* **The analytic furnace is sound, and stronger than 1 %.** The L1 projection
+  with `A₀/π = 1, A₁/π = 2/3` is *exact* for the two closed forms that matter: a
+  constant field returns `L` because `0.282095² · 4π = 1`, and a uniform upper
+  hemisphere returns `L` facing up, `0` facing down and `L/2` facing sideways.
+* **Only 5 of the 24 committed levels enable GI** (`LIT_LEVELS`), so nineteen of
+  them take `ambient_irradiance`'s fallback branch and are untouched by this
+  wave and by this audit — which is the honest scope of carried 51.
+
+#### What did not hold
+
+* **"13 of the other 56 carry a pre-existing adapter diff" is ELEVEN.** The same
+  census at `e8451338`, at `07f862f9` and at head finds the same eleven with the
+  same means to six decimals; the other two of the wave's thirteen are
+  `gi_bleed` (0.044445) and `gi_terrain` (0.028975), which are its own move and
+  are the numbers its own table reports as those frames' "before".
+* **My own first correction was wrong in the same way.** I wrote that
+  `gi_bleed`, `gi_terrain` and `gi_specular` were "byte-identical" through the
+  audit's fix; their PNGs were, their renders were not (0.0083 / 0.0095 /
+  0.0060, under the harness's tolerance). All six GI goldens are re-blessed and
+  read 0.000000 again; `GOLDEN_SET_DIGEST` ends at
+  `cb6c4704b2298cbe0d18729a3d251e29`.
+* **`the_transcribed_editor_chain_is_the_editor_viewports_own` guards only one
+  of the two things its doc claims.** *"Dropping `caps.clamp_occlusion` from
+  either the editor's source or the transcription fails this arm"* — dropping it
+  from `host.rs` does (verified); dropping it from `lit_stack.rs`'s own
+  transcription does **not**, and the whole binary stays green, because the gate
+  reads `host.rs` and nothing reads the transcription. On this adapter
+  `clamp_occlusion` clamps nothing, so the field-for-field arm cannot see it
+  either, and on an adapterless CI leg that arm SKIPS.
+* **"Mutate `ndl` → red" does not falsify the re-aimed `gi_terrain` arm.** With
+  `ndl = 1.0` the red channel goes from a 2.46 rise to a **40.98** rise and all
+  three clauses pass, because a stronger bounce satisfies every claim the arm
+  makes. It does falsify the defect it *names*: a grey terrain
+  (`albedo 0.36, 0.36, 0.36`) fails it on "the terrain did not bounce red".
+* **The fps instrument's LIT rows are not reproducible across sessions.** The
+  wave reports p95 27.916 / GPU 12.059 / stack price +8.009; the same commit on
+  the same machine in this session reads **33.043 / 15.133 / +10.520**, with the
+  shipped baseline moving 19.9 → 22.5 in step. Only a same-session A/B is
+  meaningful, which is how the audit's own cost row above was taken.
+* **The demo frame's black ceiling was real, and it was the buried probes.** A
+  probe inside a floor slab gathers `a·L − L` in every direction, which is
+  negative for any albedo below 1; a ceiling whose fetch is dominated by such
+  probes has `sky_irradiance(n) + that` driven below zero and clamped to black.
+  That is the mechanism behind `FIX3-FINAL/03-pie-b.png`'s ceiling at RGB
+  (23.7, 25.7, 28.6) beside a wall at 116.8, and it is what mechanism 2 above
+  removes.
+
+#### Carried, added by this audit
+
+61. **The sky-view factor is the PROBE's, not the hit surface's.** An arcade
+    roofed overhead but open at the side reads 0, and its columns bounce no sky
+    where they really do see it. Exact in both limits, an approximation between
+    them; the honest fix is a per-hit visibility march and it roughly doubles
+    the per-hit cost of the gather.
+62. **An ordinary room contains no probe at all.** The 40 m volume over a
+    16×8×16 grid is **5.71 m** apart vertically, so a 4 m room holds none: the
+    `room 12x12x4` rows of `interior_ambient.rs` are still identical sealed and
+    doored, because that room's ambient is interpolated entirely from probes
+    outside it. It is why the arm is aimed at the hall. A second, finer,
+    interior-following cascade is the fix; carried 52 is its outdoor twin.
+63. **`gi_intensity` multiplies a SIGNED DIFFERENCE.** Since the wave the probe
+    field is `bounce − blocked sky`, so an authored intensity above 1 amplifies
+    the *occlusion* as much as the bounce and can drive
+    `sky_irradiance + intensity·difference` negative, where the clamp takes it
+    to black. Every committed level authors 1.0; the only content that does not
+    is the golden harness's own `GI_LAMBERT_PI` compensation (π, and 2π in
+    `venue_interior`) — which is why that frame's far corner reads 1.97 rather
+    than the pre-wave 4.23, and why it did not move again under this audit.
+64. **`sky_sh_is_cheap` has a ceiling of 2.0 ms against a 0.0959 ms
+    measurement.** A "this is not free" arm rather than a ratchet; it would not
+    notice a twentyfold regression in the projection it guards.
+65. **The two quadratures still differ in size**, and now with a number: the
+    sealed-room cancellation residue is 0.08 % of an open room's reading at the
+    shipped `rays = 48` and 0.21 % at the `rays = 64` the GI goldens author.
+    Carried 56 stands, quantified.
+66. **The transcription in `lit_stack.rs` is unguarded** (above). A byte pin
+    between `editor_settings`' body and the four statements it transcribes would
+    close it, on the `apply_record_mirror` pattern the file already uses in the
+    other direction.

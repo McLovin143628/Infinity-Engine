@@ -43,6 +43,25 @@
 //! Readings are inverted back to scene radiance through the post chain's own
 //! measured curve, exactly as `sky_ambient.rs` does it, because a ratio of
 //! ACES-encoded codes is a ratio of nothing.
+//!
+//! # The quadrature, measured here
+//!
+//! The sealed hall is also the sharpest instrument in the repository for the
+//! ledger's carried *"the sky's own quadrature and the probe march's are
+//! different sizes"*. With the bounce's sky scaled away by the sky-view factor,
+//! what is left in a sealed room is the CPU's 48-direction L1 projection of the
+//! sky **minus** the GPU sky-view LUT integrated over the probe's own rays, and
+//! it should be zero:
+//!
+//! ```text
+//!     rays = 48 (GiSettings::default, and every committed level)   0.0004
+//!     rays = 64 (what the GI goldens author)                       0.0011
+//! ```
+//!
+//! against an open courtyard's 0.52 — so **0.08 %** when the two quadratures
+//! sample the same 48 directions and **0.21 %** when they do not. The arm below
+//! is aimed at the shipped configuration; at `rays = 64` the doored hall's own
+//! reading falls into the same residue and the ratio stops being meaningful.
 
 use glam::{DVec3, Quat, Vec3};
 use inf_math::FloatingOrigin;
