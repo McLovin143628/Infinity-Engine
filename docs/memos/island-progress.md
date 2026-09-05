@@ -33901,7 +33901,7 @@ authored shape; a clear noon sky is blue (blue/red > 1.3) and irradiates an
 up-facing white surface with 6–60 % of the sun's own exit radiance; midnight is
 under 2 % of noon; the shipped 48-direction / 12-step / 8-step projection is
 within **2.3 %** of a 512-direction reference at the bake's own 32/40 steps; and
-it costs **0.0954 ms**.
+it costs **0.095 ms**.
 
 **How it reaches the shaders, and why it composes exactly.** Four L1 coefficient
 lanes appended to `GiDataGpu` (`sky_sh`), which every lit pass already binds
@@ -34058,7 +34058,7 @@ p95/p99 against the same ceilings as the shipped configuration.
 
 The **term's own cost is zero on the GPU** — no new pass, no new dispatch, no new
 binding, and four dot products in a fragment that was already convolving an SH —
-and **0.0954 ms of CPU per projection**, memoized on the exact bits of everything
+and **0.095 ms of CPU per projection**, memoized on the exact bits of everything
 the integral reads so it is paid at most once per frame and not at all when the
 sun has not moved. That figure is measured in isolation
 (`atmosphere::tests::sky_sh_is_cheap`) rather than read off the frame, because
@@ -34120,6 +34120,41 @@ does block most of its sky. The fixture is the physics; the frame is the look.
     …/scratchpad/FIX3-FINAL/01-editor.png   02-pie-a.png   03-pie-b.png
     …/scratchpad/FIX3-WINDOW/02-pie-a.png   03-pie-b.png   (the shipped player, own window)
     …/scratchpad/FIX2-DEMO/*.png                           (the same street at e8451338)
+
+### Verification
+
+`cargo fmt` per member + `git diff --exit-code` clean.
+
+**The battery** (`-j 3 --no-fail-fast`, `INF_GOLDEN_STRICT=1`): **380 binaries,
+7149 passed, 0 failed, 21 ignored**, against the `e8451338` baseline of 379 /
+7137 / 0 / 21. One binary and twelve arms, every one attributed: the new
+`sky_ambient` (1), `atmosphere`'s six CPU arms, `passes::gi::sky_sh_tests`' two
+source pins, `lit_stack`'s two three-host arms and
+`apply_record_mirror`'s visibility gate.
+
+**Two gates had to move and each says why in its own commit.** The golden
+CONTENT digest (`1a03e558…` → `f7310588fca598ba368e4d2aaa89dc83`, one constant
+in three files) on the re-bless branch of its own rule, which requires a commit
+whose stated purpose is the look; and
+`a_shadow_page_never_reaches_the_ambient_term`, whose anti-vacuity check went red
+because the ambient composition moved out of the six lit shaders and into
+`env_lighting.wgsl` — so the ban follows it, and now scans three function bodies
+there as well as the call site. Mutation-verified: multiplying
+`ambient_irradiance`'s return by `shadow_factor` fails it.
+
+rustdoc **409**, the `e8451338` baseline exactly, against a ceiling of 450 — and
+not one of the 409 points at a line this wave wrote. `cargo clippy --workspace
+--all-targets -- -D warnings` last and clean.
+
+Schema constants unmoved — scene **v27**, `SCENE_PAYLOAD_VERSION` **13**,
+`EXPECTED_LEVELS` **24**; **no committed `.inf_lvl` byte moved** (no level is in
+the diff at all); manifests untouched; goldens **62**, six re-blessed; CRLF **0**
+over all 22 changed non-PNG files, counted at the byte level out of the committed
+blobs.
+
+The two commits that land after the demo loop touch a `#[cfg(test)]` module and
+doc comments; neither is in a release binary, so the frames above are of the tree
+as it stands.
 
 ### Carried
 
