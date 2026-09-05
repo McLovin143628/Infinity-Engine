@@ -34386,6 +34386,47 @@ measures them.
   (23.7, 25.7, 28.6) beside a wall at 116.8, and it is what mechanism 2 above
   removes.
 
+#### The demo loop, and what the island's own frames say
+
+`tools/demo/demo.ps1` twice on the audit's final tree, embedded mode: `HERO
+MOVED 17.340 m` and `31.991 m`, exit 0, *still running: none* both times.
+Screenshots in `…/scratchpad/AUDIT-FIX3-FINAL/` and `…/AUDIT-FIX3-RUN2/`.
+
+**The editor's own view is the only camera the demo repeats**, and it is
+measurably darker than the wave's — consistently, across two runs whose own
+spread is 0.21 of a level:
+
+    editor viewport, 01-editor.png       p05     p25     p50    mean   frac<8
+      FIX2-DEMO (before the wave)      23.21   31.00  108.06  100.03   0.0012
+      FIX3-FINAL (07f862f9)            28.00   35.00  115.64  103.72   0.0001
+      audit run 1                      25.93   31.21  110.13  100.26   0.0008
+      audit run 2                      23.93   31.00  110.92  100.48   0.0010
+
+That is the sky-view factor doing exactly what it is for: the island's street is
+a **canyon**, its walls see perhaps 60 % of the sky, and before this audit they
+bounced 100 % of it at each other. The frame loses ~3 % of its mean and its dark
+end does not move — `frac < 8` stays at a thousandth, against the 28.9 % the
+FIX2 audit photographed. The wave's gain is kept and the wave's over-count is
+returned.
+
+**The island's black regions are older than either of us.** A shipped-player
+frame series (`--pack`, no input, screenshots at 6/10/16/24/40/60 s, the FIX2
+audit's own harness) run twice — once with the audit's shaders and once with
+`07f862f9`'s, in one session:
+
+    exact-black fraction   t=6     t=10    t=16    t=24    t=40    t=60
+      at 07f862f9        0.0168  0.0168  0.0263  0.0302  0.0352  0.0673
+      after the audit    0.0462  0.0227  0.0645  0.0236  0.0537  0.0624
+
+The frames are not identical (the player streams and animates freely, so the
+two runs diverge), and neither revision is systematically blacker. What the
+pixels are is visible in the frames themselves: the **interiors of the enterable
+buildings, seen through their windows from a sunlit street**, which is the
+photograph a camera exposed for daylight actually takes. What did change is
+visible in the same series' facades — at `07f862f9` a shaded building wall
+fills half the frame at luminance 0; after the audit the equivalent wall reads
+as a lit grey.
+
 #### Carried, added by this audit
 
 61. **The sky-view factor is the PROBE's, not the hit surface's.** An arcade
@@ -34420,3 +34461,11 @@ measures them.
     next `fn`, and pins the five statements it transcribes. Mutation-verified in
     the new form: dropping `clamp_occlusion` from the transcription alone now
     fails, where before it left the whole binary green.
+67. **A street canyon is dimmer than it was, on purpose, and it is a trade.**
+    The sky-view factor takes the island's editor view from mean 103.72 to
+    100.3-100.5 (p25 35.00 to 31.0-31.2), because walls facing each other across
+    a street no longer bounce the whole unoccluded sky. The frame's dark end
+    does not move (`frac < 8` 0.0001 -> 0.0010, against the 28.9 % the FIX2
+    audit photographed), so it is a 3 % loss of overall level and not a return
+    of the defect — but a level author who tuned exposure against the wave's
+    frames will see it, and the estimator that causes it is carried at 61.
