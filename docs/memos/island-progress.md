@@ -34469,3 +34469,16 @@ as a lit grey.
     audit photographed), so it is a 3 % loss of overall level and not a return
     of the defect — but a level author who tuned exposure against the wave's
     frames will see it, and the estimator that causes it is carried at 61.
+68. **A glazed room is a SEALED room to the probe march**, so the audit's fix
+    makes shop interiors darker seen from the street. The voxelizer takes every
+    rigid instance as an occupied box and reads no `blend` field, so a shopfront
+    window is opaque occupancy; the room behind it therefore has no opening at
+    all, the sky-view factor reads 0, and the room is correctly dark for a room
+    with no windows. Measured on the audit's own Play frame: the interior behind
+    a shaded shopfront reads p50 **5.32** with 56 % of its pixels under
+    luminance 8, against the shaded facade beside it at p25 131.6 and the hero
+    on the pavement at p25 87.8. Before this audit those interiors were lit by
+    the unoccluded sky — the right brightness for the wrong reason. Skipping
+    translucent instances in `gi::collect_primitives` (or voxelizing them with a
+    transmittance) is the fix, and it belongs with carried 55's other
+    unlit-surface work rather than in an audit.
