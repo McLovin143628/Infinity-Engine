@@ -4970,18 +4970,27 @@ fn golden_gi_terrain() {
     // **+0.331**. The old number was the over-estimate, not the signal.
     //
     // So the arm reads the two channels instead, where the effect is not one
-    // small ratio but two large, independent numbers:
+    // small ratio but two large, independent numbers. Measured at `07f862f9`:
     //
     //   red   182.30 -> 177.23   (a drop of 5.07)
     //   green 184.35 -> 174.51   (a drop of 9.85)
     //
-    // Adding the ground makes the wall DARKER, because a wall standing on
-    // something receives less sky than one floating in an open sphere of it —
+    // …and at head, after the FIX3 audit gave the probe field a sky-view factor
+    // and stopped buried probes voting in the blend:
+    //
+    //   red   182.30 -> 184.75   (a RISE of 2.46)
+    //   green 184.35 -> 174.51   (the same drop of 9.85)
+    //
+    // Adding the ground makes the wall darker in GREEN, because a wall standing
+    // on something receives less sky than one floating in an open sphere of it —
     // that is the `-sky` term the FIX3 probe march subtracts, and it is the
     // occlusion the sky-irradiance term would otherwise have handed out for
-    // free. And it makes it darker **twice as fast in green as in red**, which
-    // is the red albedo coming back. A terrain that reached the voxelizer with
-    // no albedo would fail the second assert; one that never reached it at all
+    // free. In RED the ground's own albedo now more than pays that back, which
+    // is the bounce this fixture exists to see and is why the second assert is
+    // written as a margin between the channels rather than as two drops. A
+    // terrain that reached the voxelizer with no albedo would return the same
+    // amount in both and fail it (grey ground: `red_drop ~= green_drop = 9.85`
+    // against a required `9.85 > 13.79`); one that never reached it at all
     // would fail the first.
     let px_band = (band.0.start, band.1.start, band.0.end, band.1.end);
     let ch =

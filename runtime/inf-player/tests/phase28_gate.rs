@@ -2108,8 +2108,34 @@ fn the_golden_set_is_pinned_and_additive_after_phase_28() {
     //                    doubles, green/red 1.996 -> 3.371
     //   gi_scatter_neon  0.0369 / 0.3564
     //
-    // `gi_bleed`, `gi_terrain` and `gi_specular` are byte-identical through it.
-    const GOLDEN_SET_DIGEST: &str = "51c225fa4f1afc63d4fafd5ff3f31d46";
+    // …and THREE MORE, on a second pass, because the first write-up of this
+    // block said `gi_bleed`, `gi_terrain` and `gi_specular` were "byte-identical
+    // through it" and they were not. Their committed PNGs had not moved, which
+    // is a different sentence: the RENDER moved, by mean 0.0083 / 0.0095 /
+    // 0.0060 — under the harness's perceptual tolerance, so the strict run was
+    // green and the claim went unmeasured. Measured on this adapter, all six
+    // GI goldens read **0.000000** against their frames at `07f862f9` and three
+    // of them did not any more. They are re-blessed on the same branch of the
+    // same rule, for the reason `golden.rs` states: a frame that no longer
+    // depicts what the engine draws is a frame nobody can read a regression off.
+    //
+    //   gi_bleed         mean 0.0083 / max 0.0452   near-wall red/green 1.462
+    //                    -> 1.479
+    //   gi_terrain       0.0095 / 0.0380            green drop 9.85 held; the
+    //                    RED drop went +5.07 -> -2.46, i.e. the red ground now
+    //                    brightens the wall's red instead of darkening it less
+    //   gi_specular      0.0060 / 0.0478            grazing floor 194.5 -> 196.5
+    //                    against a flat control 59.3 -> 57.8
+    //
+    // And the count above it: **ELEVEN** frames of the other 56 carry a
+    // pre-existing adapter diff, not thirteen. Measured at `e8451338`,
+    // `07f862f9` and here, the same eleven appear with the same means to six
+    // decimals (cave_mouth, deform, ground_close, terrain, terrain_lod,
+    // terrain_splat and the five water frames). The wave's thirteen counted
+    // `gi_bleed` (0.044445) and `gi_terrain` (0.028975) among them, which are
+    // not adapter diffs at all: they are the wave's own move, and they are the
+    // very numbers its own table reports as the "before" of those two frames.
+    const GOLDEN_SET_DIGEST: &str = "cb6c4704b2298cbe0d18729a3d251e29";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

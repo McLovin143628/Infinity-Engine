@@ -226,7 +226,12 @@ fn gi_fetch_sh(world_pos: vec3<f32>, n: vec3<f32>) -> mat4x3<f32> {
         // probe's own cell is never fully behind a surface inside it, so a
         // surface with no probe in front of it falls through to the plain blend
         // below rather than going black.
-        let probe_pos = pmin + (base + off) * (extent / max(pd - 1.0, vec3<f32>(1.0)));
+        // From `gc` and not from `base + off`: at the volume's far face
+        // `base + off` names a probe one cell past the grid, which `gc` clamps
+        // for the FETCH — so a position built from the unclamped index would be
+        // a cell away from the probe whose coefficients are being weighted.
+        // Mirrors `cs_probes`' own `probe_min.xyz + frac * extent`.
+        let probe_pos = pmin + vec3<f32>(gc) * (extent / max(pd - 1.0, vec3<f32>(1.0)));
         let to_probe = probe_pos - world_pos;
         let facing = max(dot(normalize(to_probe + n * 1.0e-4), n), 0.0);
         let vwi = weight * s0.w * facing;
