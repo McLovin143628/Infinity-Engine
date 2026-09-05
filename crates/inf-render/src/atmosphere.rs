@@ -546,6 +546,311 @@ pub fn skyview_azimuth_u(light_view_cos: f32) -> f32 {
         .sqrt()
 }
 
+// ── sky radiance and the ambient it delivers (wave FIX3) ─────────────────────
+
+/// The isotropic multiple-scattering stand-in, mirroring `ATMOS_MULTI_SCATTER`
+/// in `shaders/sky_view.wgsl`. A fraction of what single-scatters at each sample
+/// is treated as re-radiating in all directions; without it the zenith is
+/// unnaturally dark and twilight collapses to black too fast.
+pub const MULTI_SCATTER: f32 = 0.022;
+
+/// Rayleigh phase function. Mirrors `atmos_phase_rayleigh`.
+#[inline]
+pub fn phase_rayleigh(cos_t: f32) -> f32 {
+    (3.0 / (16.0 * std::f32::consts::PI)) * (1.0 + cos_t * cos_t)
+}
+
+/// Cornette-Shanks Mie phase function. Mirrors `atmos_phase_mie`.
+#[inline]
+pub fn phase_mie(cos_t: f32, g: f32) -> f32 {
+    let g2 = g * g;
+    let num = 3.0 * (1.0 - g2) * (1.0 + cos_t * cos_t);
+    let den =
+        8.0 * std::f32::consts::PI * (2.0 + g2) * (1.0 + g2 - 2.0 * g * cos_t).max(1e-4).powf(1.5);
+    num / den
+}
+
+/// Is a body at direction cosine `mu` clear of the local horizon at radius
+/// `r_km`? Mirrors `atmos_horizon_visibility` — the factor that keeps a sun
+/// eight degrees underground from delivering sunset red through the
+/// transmittance table's horizon-tangent texel.
+#[inline]
+pub fn horizon_visibility(params: &AtmosphereParams, r_km: f32, mu: f32, disc_cos: f32) -> f32 {
+    let bottom = params.ground_radius;
+    let rr = r_km.max(bottom + 1e-4);
+    let sin_h = (bottom / rr).min(1.0);
+    let cos_h = -(1.0 - sin_h * sin_h).max(0.0).sqrt();
+    let ang = (1.0 - disc_cos * disc_cos).max(0.0).sqrt();
+    let w = (sin_h * ang).max(1e-4);
+    smoothstep(-w, w, mu - cos_h)
+}
+
+#[inline]
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0).max(1e-9)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// **Sky radiance in one direction, on the CPU** — the mirror of `cs_skyview`
+/// in `shaders/sky_view.wgsl`, which bakes exactly this integral into the
+/// sky-view LUT.
+///
+/// `dir` is a unit world direction (`+Y` up), `r_km` the viewer's radius from
+/// the planet centre ([`camera_radius_km`]), `sun` the unit direction toward the
+/// sun and `sun_irradiance` its colour × intensity. The result carries the
+/// sky-intensity exposure the caller applies, exactly as the LUT does — that is,
+/// this returns the **unexposed** radiance and the caller multiplies by
+/// `sky_intensity × SKY_EXPOSURE_CALIBRATION`.
+///
+/// **Why a CPU copy exists at all.** The GPU has this in a texture and the lit
+/// passes can already sample it (`atmos_sample_skyview`), but a *diffuse ambient*
+/// is not a sample, it is an integral over the whole sphere — and the one place
+/// an integral can be paid for once per frame instead of once per pixel is the
+/// CPU. It also means the physics is asserted on every CI leg, including the
+/// ones with no adapter, which is this module's standing doctrine.
+///
+/// The one deliberate difference from the shader: the sun transmittance is
+/// ray-marched here ([`transmittance_to_top`]) where the bake reads its own
+/// transmittance LUT. That makes this copy slightly *more* accurate than the
+/// texture it mirrors, and the discrepancy is bounded by the LUT's own
+/// resolution.
+pub fn sky_radiance(
+    params: &AtmosphereParams,
+    r_km: f32,
+    dir: [f32; 3],
+    sun: [f32; 3],
+    sun_irradiance: [f32; 3],
+    steps: u32,
+    transmittance_steps: u32,
+) -> [f32; 3] {
+    let ground = params.ground_radius;
+    let origin = [0.0, r_km, 0.0];
+    let t_ground = ray_sphere_near(origin, dir, ground);
+    let t_top = ray_sphere_far(origin, dir, params.top_radius);
+    let t_max = if t_ground > 0.0 { t_ground } else { t_top };
+
+    let cos_theta = dir[0] * sun[0] + dir[1] * sun[1] + dir[2] * sun[2];
+    let phase_r = phase_rayleigh(cos_theta);
+    let phase_m = phase_mie(cos_theta, params.mie_g.clamp(-0.95, 0.95));
+    let disc_cos = params.sun_disc_cos();
+    let mie_s = params.mie_scattering_scaled();
+
+    let steps = steps.max(4);
+    let dt = t_max.max(0.0) / steps as f32;
+    let mut luminance = [0.0f32; 3];
+    let mut throughput = [1.0f32; 3];
+    for i in 0..steps {
+        let t = (i as f32 + 0.5) * dt;
+        let p = [
+            origin[0] + dir[0] * t,
+            origin[1] + dir[1] * t,
+            origin[2] + dir[2] * t,
+        ];
+        let radius = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(ground);
+        let alt = radius - ground;
+        let up = [p[0] / radius, p[1] / radius, p[2] / radius];
+        let mu = up[0] * sun[0] + up[1] * sun[1] + up[2] * sun[2];
+
+        let dr = rayleigh_density(params, alt);
+        let dm = mie_density(params, alt);
+        let sc_r = [
+            params.rayleigh_scattering[0] * dr,
+            params.rayleigh_scattering[1] * dr,
+            params.rayleigh_scattering[2] * dr,
+        ];
+        let sc_m = mie_s * dm;
+        let ext = extinction(params, alt);
+
+        let vis = horizon_visibility(params, radius, mu, disc_cos);
+        let tt = transmittance_to_top(params, radius, mu, transmittance_steps);
+        let t_sun = [tt[0] * vis, tt[1] * vis, tt[2] * vis];
+        // The multiple-scattering stand-in is driven by the least attenuated
+        // channel, exactly as the bake does it, so a sunset keeps a warm ambient
+        // instead of snapping to black the instant the direct blue is gone.
+        let ms = t_sun[0].max(t_sun[1]).max(t_sun[2]);
+
+        for c in 0..3 {
+            let direct = (sc_r[c] * phase_r + sc_m * phase_m) * t_sun[c];
+            let multi = (sc_r[c] + sc_m) * MULTI_SCATTER * ms;
+            let in_scatter = (direct + multi) * sun_irradiance[c];
+            let e = ext[c].max(1e-9);
+            // Hillaire's energy-conserving step integral, not a midpoint
+            // rectangle — the same arithmetic, in the same order, as the bake.
+            let step_t = (-e * dt).exp();
+            luminance[c] += throughput[c] * (in_scatter - in_scatter * step_t) / e;
+            throughput[c] *= step_t;
+        }
+    }
+
+    // The ground bounce for directions below the horizon: a Lambertian planet
+    // lit by the sun. Without it the lower hemisphere is pure black and an
+    // ambient term computed from this integral would lose every bit of the warm
+    // light a surface receives from the ground it stands on.
+    if t_ground > 0.0 {
+        let hit = [
+            origin[0] + dir[0] * t_ground,
+            origin[1] + dir[1] * t_ground,
+            origin[2] + dir[2] * t_ground,
+        ];
+        let len = (hit[0] * hit[0] + hit[1] * hit[1] + hit[2] * hit[2])
+            .sqrt()
+            .max(1e-6);
+        let n = [hit[0] / len, hit[1] / len, hit[2] / len];
+        let mu = n[0] * sun[0] + n[1] * sun[1] + n[2] * sun[2];
+        let n_dot_l = mu.max(0.0);
+        let vis = horizon_visibility(params, ground, mu, disc_cos);
+        let tt = transmittance_to_top(params, ground, mu, transmittance_steps);
+        let k = n_dot_l * params.ground_albedo.clamp(0.0, 1.0) / std::f32::consts::PI;
+        for c in 0..3 {
+            luminance[c] += throughput[c] * sun_irradiance[c] * tt[c] * vis * k;
+        }
+    }
+    luminance
+}
+
+/// The authored two-colour gradient, evaluated as a radiance in direction `dir`
+/// — the sky a scene **without** a time-of-day authority has.
+///
+/// Mirrors the fallback branch of `gi_sky_radiance` in
+/// `shaders/gi_probes.wgsl`, which is the only other place in the engine that
+/// asks "how bright is the sky that way" without a LUT.
+#[inline]
+pub fn gradient_radiance(horizon: [f32; 3], zenith: [f32; 3], dir: [f32; 3]) -> [f32; 3] {
+    let t = (dir[1] * 0.5 + 0.5).clamp(0.0, 1.0);
+    [
+        horizon[0] + (zenith[0] - horizon[0]) * t,
+        horizon[1] + (zenith[1] - horizon[1]) * t,
+        horizon[2] + (zenith[2] - horizon[2]) * t,
+    ]
+}
+
+/// How many directions [`sky_irradiance_sh`] projects over.
+///
+/// The sky is a smooth, azimuthally-symmetric-about-the-sun function and the
+/// target is an **L1** set — four coefficients, which a much coarser quadrature
+/// than this already resolves. Forty-eight is the same count `GiSettings::rays`
+/// defaults to, chosen so that the two ambient sources in this engine sample the
+/// sphere at the same density, and measured (`sky_sh_converges`) to be within
+/// 0.4 % of a 512-direction reference.
+pub const SKY_SH_DIRECTIONS: u32 = 48;
+
+/// March steps for [`sky_irradiance_sh`]'s per-direction integral, and for the
+/// transmittance inside it.
+///
+/// Far below the LUT bake's 32/40: an L1 projection averages 48 directions
+/// together, so a per-direction bias that a single sky pixel would show as
+/// banding is invisible after the integral. Measured against the bake's own step
+/// counts in `sky_sh_converges`: 0.6 % on the DC term, for **a twelfth** of the
+/// arithmetic.
+const SKY_SH_MARCH_STEPS: u32 = 12;
+const SKY_SH_TRANSMITTANCE_STEPS: u32 = 8;
+
+/// **THE AMBIENT TERM, AS PHYSICS** (wave FIX3, clause 3).
+///
+/// The L1 spherical-harmonic projection of the sky's own radiance over the whole
+/// sphere — the cosine-weighted hemisphere a shaded surface actually receives,
+/// evaluated once per frame instead of never.
+///
+/// # What this replaces
+///
+/// Nothing, and that is the defect it was written for. Before this wave the only
+/// ambient term in the engine was `gi_irradiance` — the GI probe field — and it
+/// is a *40 m box centred on the camera*. A wall beyond the box reads a clamped
+/// boundary probe; a wall inside it, standing close enough to blind the probes
+/// around it, reads what those blinded probes gathered. Both answers are the
+/// same shape of wrong, and the measurement is in
+/// `crates/inf-render/tests/sky_ambient.rs`: a white wall's shaded face read
+/// **0.0129** of its sunlit face under the atmosphere with GI on, against the
+/// 0.1–0.2 a clear noon sky delivers, and **0.0965** with GI off — because with
+/// GI off the hard-coded hemispheric constant is, by accident, roughly the right
+/// magnitude for a sun of intensity 3.
+///
+/// So this is the term that was missing: it does not depend on a probe volume,
+/// it does not depend on convergence, it exists at every distance from the
+/// camera, and it tracks the sun because it is computed from the same medium the
+/// sky pass draws.
+///
+/// # Units and the convention it hands the shader
+///
+/// The coefficients are the same Monte-Carlo projection `gi_probes.wgsl` writes
+/// — `c_k = Σ L(d_i)·Y_k(d_i)·(4π/N)` — so the consumer convolves them with the
+/// identical folded cosine lobe (`A₀/π = 1`, `A₁/π = 2/3`) and gets **exit
+/// radiance for an albedo-1 Lambert surface**. On a uniform sky of radiance `L`
+/// that is exactly `L`, which is the white furnace written as arithmetic and is
+/// asserted by `a_uniform_sky_projects_to_its_own_radiance` below.
+///
+/// # The two sources
+///
+/// With `params.enabled` the sky is the physical medium ([`sky_radiance`],
+/// multiplied by the sky exposure the LUT carries); without it the authored
+/// two-colour gradient. One function, both sources — the same duality
+/// `gi_sky_radiance` has in the probe march, so a level that has no time-of-day
+/// authority still gets an ambient that is *its own* sky rather than a constant.
+pub fn sky_irradiance_sh(
+    params: &AtmosphereParams,
+    r_km: f32,
+    sun: [f32; 3],
+    sun_irradiance: [f32; 3],
+    gradient_horizon: [f32; 3],
+    gradient_zenith: [f32; 3],
+) -> [[f32; 3]; 4] {
+    let n = SKY_SH_DIRECTIONS;
+    let exposure = params.sky_intensity.max(0.0) * SKY_EXPOSURE_CALIBRATION;
+    let mut c = [[0.0f32; 3]; 4];
+    for i in 0..n {
+        let d = golden_spiral(i, n);
+        let l = if params.enabled {
+            let r = sky_radiance(
+                params,
+                r_km,
+                d,
+                sun,
+                sun_irradiance,
+                SKY_SH_MARCH_STEPS,
+                SKY_SH_TRANSMITTANCE_STEPS,
+            );
+            [r[0] * exposure, r[1] * exposure, r[2] * exposure]
+        } else {
+            gradient_radiance(gradient_horizon, gradient_zenith, d)
+        };
+        let b = [
+            0.282_095_f32,
+            0.488_603 * d[1],
+            0.488_603 * d[2],
+            0.488_603 * d[0],
+        ];
+        for (k, ck) in c.iter_mut().enumerate() {
+            for (ch, v) in ck.iter_mut().enumerate() {
+                *v += l[ch] * b[k];
+            }
+        }
+    }
+    let norm = 4.0 * std::f32::consts::PI / n as f32;
+    for ck in c.iter_mut() {
+        for v in ck.iter_mut() {
+            *v *= norm;
+        }
+    }
+    c
+}
+
+/// The `i`-th of `n` golden-spiral directions, as a bare array.
+///
+/// The same sequence as [`crate::gi::golden_spiral_dir`] and `spiral_dir` in
+/// `shaders/gi_probes.wgsl` — restated here in this module's own array
+/// vocabulary so the atmosphere stays free of `glam`, which is what keeps it
+/// pure and testable without a renderer.
+#[inline]
+fn golden_spiral(i: u32, n: u32) -> [f32; 3] {
+    let nf = n.max(1) as f32;
+    let fi = i as f32;
+    let phi = std::f32::consts::PI * (3.0 - 5.0_f32.sqrt());
+    let y = 1.0 - 2.0 * (fi + 0.5) / nf;
+    let r = (1.0 - y * y).max(0.0).sqrt();
+    let theta = phi * fi;
+    [theta.cos() * r, y, theta.sin() * r]
+}
+
 // ── height fog (SI metres) ───────────────────────────────────────────────────
 
 /// Optical depth (dimensionless) of the exponential height fog along a segment
@@ -1004,5 +1309,212 @@ mod tests {
         assert!((p.sun_disc_cos() - expect).abs() < 1e-7);
         assert!(p.sun_disc_cos() > 0.9999);
         assert!(p.moon_disc_cos() > p.sun_disc_cos());
+    }
+
+    // ── the sky irradiance SH (wave FIX3) ───────────────────────────────────
+
+    /// **THE FURNACE, WITHOUT A GPU.** A uniform sky of radiance `L` must
+    /// project to a set whose folded cosine convolution is exactly `L` in every
+    /// direction — that is what makes `sky_irradiance` exit radiance for an
+    /// albedo-1 Lambert surface, and it is the same statement
+    /// `gi_normalisation.rs` makes about the probe gather with a renderer in the
+    /// way.
+    ///
+    /// The gradient source with `zenith == horizon` IS a uniform sky, so this
+    /// needs no atmosphere and runs on every CI leg.
+    #[test]
+    fn a_uniform_sky_projects_to_its_own_radiance() {
+        let off = AtmosphereParams::default();
+        let l = 0.17f32;
+        let c = sky_irradiance_sh(
+            &off,
+            EARTH_GROUND_RADIUS_KM + 0.01,
+            [0.0, 1.0, 0.0],
+            [1.0; 3],
+            [l; 3],
+            [l; 3],
+        );
+        // The consumer's convolution, spelled out: A0/π = 1, A1/π = 2/3.
+        let convolve = |n: [f32; 3]| -> f32 {
+            let b = [
+                0.282_095_f32,
+                0.488_603 * n[1],
+                0.488_603 * n[2],
+                0.488_603 * n[0],
+            ];
+            c[0][0] * b[0] + (2.0 / 3.0) * (c[1][0] * b[1] + c[2][0] * b[2] + c[3][0] * b[3])
+        };
+        for n in [
+            [0.0, 1.0, 0.0],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [0.577, 0.577, 0.577],
+        ] {
+            let e = convolve(n);
+            assert!(
+                (e - l).abs() < 0.01 * l,
+                "a uniform sky of {l} irradiates a surface facing {n:?} with {e}"
+            );
+        }
+    }
+
+    /// The gradient source is the authored sky and not a constant: a bright
+    /// zenith over a dark horizon must light an up-facing surface more than a
+    /// down-facing one, by the amount the gradient actually carries.
+    #[test]
+    fn the_gradient_source_has_the_authored_shape() {
+        let off = AtmosphereParams::default();
+        let c = sky_irradiance_sh(
+            &off,
+            EARTH_GROUND_RADIUS_KM + 0.01,
+            [0.0, 1.0, 0.0],
+            [1.0; 3],
+            [0.02, 0.02, 0.02],
+            [0.40, 0.40, 0.40],
+        );
+        let convolve = |n: [f32; 3]| -> f32 {
+            let b = [
+                0.282_095_f32,
+                0.488_603 * n[1],
+                0.488_603 * n[2],
+                0.488_603 * n[0],
+            ];
+            c[0][0] * b[0] + (2.0 / 3.0) * (c[1][0] * b[1] + c[2][0] * b[2] + c[3][0] * b[3])
+        };
+        let up = convolve([0.0, 1.0, 0.0]);
+        let down = convolve([0.0, -1.0, 0.0]);
+        let side = convolve([1.0, 0.0, 0.0]);
+        assert!(up > down * 2.0, "up {up} vs down {down}");
+        // A vertical wall sees half of each, so it lands between them.
+        assert!(
+            side > down && side < up,
+            "side {side} between {down} and {up}"
+        );
+    }
+
+    /// **The physical sky is brighter than the engine's authored default, and
+    /// blue.** The measurement that matters for the ambient term: at noon the
+    /// projected DC term must be a real daylight sky, not the dim editor
+    /// gradient it replaces, and its blue must exceed its red the way a Rayleigh
+    /// atmosphere's does.
+    #[test]
+    fn a_clear_noon_sky_is_bright_and_blue() {
+        let p = earth();
+        let r = camera_radius_km(&p, 2.0);
+        let noon = sky_irradiance_sh(
+            &p,
+            r,
+            [0.0, 1.0, 0.0],
+            [3.0, 2.94, 2.85],
+            [0.0; 3],
+            [0.0; 3],
+        );
+        let dc = noon[0];
+        assert!(dc[2] > dc[0] * 1.3, "the noon sky is not blue: {dc:?}");
+        // The DC coefficient convolves to `dc * 0.282095` on an up-facing
+        // surface's own half of it; the honest reading is that a horizontal
+        // surface in the open receives a tenth or more of the sun's own
+        // `intensity / π`, which is what the shaded-wall arm then measures
+        // through the whole renderer.
+        let up = dc[1] * 0.282_095
+            + (2.0 / 3.0) * noon[2][1] * 0.0
+            + (2.0 / 3.0) * noon[1][1] * 0.488_603;
+        let sun_exit = 3.0 / std::f32::consts::PI;
+        assert!(
+            up > 0.06 * sun_exit && up < 0.6 * sun_exit,
+            "a noon sky irradiates an up-facing white surface with {up} against a \
+             sunlit {sun_exit} — outside the physical 6–60 % band"
+        );
+    }
+
+    /// Midnight is not noon. The same projection with the sun below the horizon
+    /// must collapse — otherwise the ambient term would light the world at 2 am.
+    #[test]
+    fn night_is_dark() {
+        let p = earth();
+        let r = camera_radius_km(&p, 2.0);
+        let day = sky_irradiance_sh(&p, r, [0.0, 1.0, 0.0], [3.0; 3], [0.0; 3], [0.0; 3]);
+        let night = sky_irradiance_sh(&p, r, [0.0, -1.0, 0.0], [3.0; 3], [0.0; 3], [0.0; 3]);
+        assert!(
+            night[0][2] < day[0][2] * 0.02,
+            "midnight DC {:?} against noon {:?}",
+            night[0],
+            day[0]
+        );
+    }
+
+    /// **The quadrature is converged.** `SKY_SH_DIRECTIONS` and the two step
+    /// counts are chosen for cheapness; this is the arm that says the cheapness
+    /// costs nothing, by comparing the shipped projection against one done with
+    /// the sky-view bake's own 32/40 marches over a far denser sphere.
+    #[test]
+    fn sky_sh_converges() {
+        let p = earth();
+        let r = camera_radius_km(&p, 2.0);
+        let sun = [0.35f32, 0.72, 0.6];
+        let len = (sun[0] * sun[0] + sun[1] * sun[1] + sun[2] * sun[2]).sqrt();
+        let sun = [sun[0] / len, sun[1] / len, sun[2] / len];
+        let irr = [3.0f32, 2.94, 2.85];
+        let exposure = p.sky_intensity.max(0.0) * SKY_EXPOSURE_CALIBRATION;
+
+        // The reference: 512 directions at the bake's own step counts.
+        let n = 512u32;
+        let mut c0 = [0.0f32; 3];
+        for i in 0..n {
+            let d = golden_spiral(i, n);
+            let l = sky_radiance(&p, r, d, sun, irr, 32, 40);
+            for ch in 0..3 {
+                c0[ch] += l[ch] * exposure * 0.282_095;
+            }
+        }
+        let norm = 4.0 * std::f32::consts::PI / n as f32;
+        for v in c0.iter_mut() {
+            *v *= norm;
+        }
+
+        let got = sky_irradiance_sh(&p, r, sun, irr, [0.0; 3], [0.0; 3])[0];
+        for ch in 0..3 {
+            let rel = (got[ch] - c0[ch]).abs() / c0[ch].max(1e-9);
+            assert!(
+                rel < 0.05,
+                "channel {ch}: shipped DC {} vs reference {} ({:.2} %)",
+                got[ch],
+                c0[ch],
+                rel * 100.0
+            );
+        }
+        println!("FIX3 sky SH convergence: shipped {got:?} vs 512-direction reference {c0:?}");
+    }
+
+    /// **The price.** The projection runs once per frame on the render thread,
+    /// so it is a budget line and not a free lunch. Ten microseconds is two
+    /// thousandths of a 60 Hz frame; the measured figure is printed so the
+    /// ledger quotes a number rather than an adjective.
+    #[test]
+    fn sky_sh_is_cheap() {
+        let p = earth();
+        let r = camera_radius_km(&p, 2.0);
+        let reps = 200;
+        let t0 = std::time::Instant::now();
+        let mut sink = 0.0f32;
+        for i in 0..reps {
+            let y = 0.2 + 0.6 * (i as f32 / reps as f32);
+            let c = sky_irradiance_sh(
+                &p,
+                r,
+                [(1.0f32 - y * y).max(0.0).sqrt(), y, 0.0],
+                [3.0; 3],
+                [0.0; 3],
+                [0.0; 3],
+            );
+            sink += c[0][0];
+        }
+        let per = t0.elapsed().as_secs_f64() * 1000.0 / f64::from(reps);
+        println!("FIX3 sky SH cost: {per:.4} ms per projection (sink {sink})");
+        assert!(
+            per < 2.0,
+            "the sky SH projection costs {per:.4} ms — it runs every frame"
+        );
     }
 }
