@@ -211,3 +211,41 @@ fn every_field_of_the_render_record_is_read_by_both_seams() {
         );
     }
 }
+
+// ── the other half of "the two hosts light one world" (wave FIX3) ───────────
+
+/// **A HIDDEN ACTOR MUST BE DARK IN BOTH HOSTS.**
+///
+/// The player's projection loop is gated once, at the top:
+/// `if !visible { continue; }`, so hiding anything hides everything it
+/// contributes — its mesh, its scatter and its LIGHTS. The editor viewport
+/// applies visibility per COMPONENT instead, and until this wave the venue rig
+/// (`PcgVolume::lights`, wave VEN1a) sat outside every guard: hiding a venue
+/// volume in the viewport left its stage lamps burning, and the same level in
+/// PIE went dark.
+///
+/// That is a lighting divergence between preview and shipping on a level the
+/// island actually contains, and it is exactly the class of thing wave FIX3 was
+/// sent to find. It could not be caught by a runtime arm — no crate depends on
+/// both hosts — so it is caught here, in the file the repository already uses to
+/// hold the two projections together, and by reading the source.
+///
+/// Mutation-verified: dropping `.filter(|_| visible)` from `host.rs` fails this.
+#[test]
+fn every_light_the_editor_pushes_is_behind_a_visibility_check() {
+    let code: String = VIEWPORT.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        code.contains("if let Some(vol) = w.get::<PcgVolume>(entity).filter(|_| visible) {"),
+        "the editor viewport's `PcgVolume` branch is no longer visibility-gated,          so a hidden venue volume keeps its rig lit in the viewport and loses it          in PIE"
+    );
+    assert!(
+        code.contains("if let Some(light) = w.get::<Light>(entity) { if visible {"),
+        "the editor viewport's `Light` branch is no longer visibility-gated"
+    );
+    // …and the player's single gate, which is what the editor is being held to.
+    let player: String = PLAYER.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        player.contains("if !visible { continue; }"),
+        "the shipped player's projection loop no longer skips invisible entities,          so the claim the editor is measured against is gone"
+    );
+}

@@ -2018,7 +2018,17 @@ impl EngineHost {
             //
             // A pick on the scatter resolves to the volume entity (id→guid), so the
             // volume is selectable by clicking its content.
-            if let Some(vol) = w.get::<PcgVolume>(entity) {
+            // **`.filter(|_| visible)` since wave FIX3, and it is a lighting fix.**
+            // The player's whole projection loop sits behind
+            // `if !visible { continue; }` (`inf_player::render`), so hiding a
+            // venue volume in a shipped build turns its lamps off. The editor
+            // applies visibility per COMPONENT, and the rig block below sat
+            // outside every guard — so hiding the volume in the viewport left the
+            // stage lit and the same level went dark in PIE. Two different worlds
+            // on one machine, on the half of the frame the MIRROR comment inside
+            // this block claims is identical. The scatter half below already had
+            // its own `visible &&`, so this changes nothing for it.
+            if let Some(vol) = w.get::<PcgVolume>(entity).filter(|_| visible) {
                 // **THE VENUE RIG** (wave VEN1a): the real, coloured, cone-shaped
                 // lights a grammar-built venue hangs over its stage and behind its
                 // bar. PCG produced no light of any kind until this wave.

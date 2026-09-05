@@ -2058,7 +2058,13 @@ pub fn shipped_settings(
 /// viewport's copy over the editor-core `RenderSettingsRecord`). Both seams must
 /// agree so the shipped player and the editor viewport apply a level's render
 /// block the same way (preview == shipping).
-fn apply_record(r: &RenderSettingsRecord) -> RenderSettings {
+///
+/// **Public since wave FIX3** so `tests/lit_stack.rs` can restate the editor
+/// viewport's settings chain without carrying a third copy of this mapping. No
+/// crate in the repository depends on both hosts, so that arm has to transcribe
+/// one of them; using this copy is sound precisely because
+/// `tests/apply_record_mirror.rs` pins the two bodies character-for-character.
+pub fn apply_record(r: &RenderSettingsRecord) -> RenderSettings {
     let d = RenderSettings::default();
     RenderSettings {
         exposure: r.exposure,

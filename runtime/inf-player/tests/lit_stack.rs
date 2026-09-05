@@ -44,6 +44,7 @@
 
 use std::path::PathBuf;
 
+use inf_render::{detect_tier, AdapterCaps, GpuContext, RenderSettings, RenderTier, VgeomSettings};
 use inf_scene::{RenderSettingsRecord, RuntimeLevel};
 
 /// How many `.inf_lvl` files this repository commits — the same number
@@ -340,4 +341,157 @@ fn no_windowed_boot_path_substitutes_a_default_render_block() {
         code.len(),
         src.len() - code.len()
     );
+}
+
+// ── the editor viewport and the shipped player, on one adapter (wave FIX3) ──
+
+/// The editor viewport's settings decision, transcribed from
+/// `inf_viewport::host::apply_render_settings` (host.rs) plus
+/// `requested_render_settings`.
+///
+/// **A transcription, and pinned as one.** No crate in this repository depends
+/// on both `inf-viewport` and `inf-player` — the editor's host is Ring 1 and the
+/// player is Ring 2 — so a runtime comparison of the two chains has to restate
+/// one of them. `shipped_settings`' own doc says why that is dangerous: *"a
+/// harness that rebuilt this chain by hand would measure a configuration nobody
+/// ships"*. So the restatement below is checked against the source it restates
+/// by `the_transcribed_editor_chain_is_the_editor_viewports_own` — the same
+/// `include_str!` instrument `apply_record_mirror.rs` uses on the two
+/// `apply_record` bodies, and for the same reason.
+///
+/// The two chains are documented as differing in exactly two places:
+///
+/// * `detect_tier`'s second argument — the editor passes
+///   `RenderSettings::default()`, the player passes the mapped record. It reads
+///   only `tier_override`, which `apply_record`'s `..d` always leaves `None`, so
+///   the two arguments cannot produce different tiers. Asserted below by
+///   comparing the tier too, on both records.
+/// * `clamp_mobile`, which the player applies under `cfg(wasm32/android)` and
+///   the editor deliberately does not (there is no mobile editor). Unreachable
+///   on every desktop target this arm runs on.
+fn editor_settings(gpu: &GpuContext, record: RenderSettingsRecord) -> (RenderSettings, RenderTier) {
+    let base = inf_player::render::apply_record(&record);
+    let tier = detect_tier(gpu, &RenderSettings::default());
+    let caps = AdapterCaps::probe(gpu);
+    let requested = RenderSettings {
+        vgeom: VgeomSettings {
+            enabled: true,
+            ..base.vgeom
+        },
+        ..base
+    };
+    (caps.clamp_occlusion(tier.apply(requested)), tier)
+}
+
+/// **THE EDITOR VIEWPORT AND THE SHIPPED PLAYER LIGHT A LEVEL IDENTICALLY**
+/// (wave FIX3, clause 2).
+///
+/// The FIX2 audit measured the island's hero at 232/255 in the editor viewport
+/// and 1.8 in Play, and named the editor the outlier. Wave FIX3 measured the
+/// ambient term instead and found the two hosts were never configured
+/// differently at all — what differed was where the camera was standing, and
+/// the defect was in the term both of them spent (`crates/inf-render/tests/
+/// sky_ambient.rs`).
+///
+/// That is a claim about a tree, and it was true by inspection and by nothing
+/// else. This is the arm: every committed level's authored record, through both
+/// chains, on this machine's real adapter, compared **field for field** —
+/// `RenderSettings` is `PartialEq`, so a field added to it in a future wave and
+/// mapped by only one host fails here without anybody remembering to extend a
+/// list.
+#[test]
+fn the_editor_viewport_and_the_shipped_player_light_a_level_identically() {
+    let Ok(gpu) = inf_render::GpuContext::headless() else {
+        eprintln!("SKIP: no GPU adapter");
+        return;
+    };
+    let mut checked = 0;
+    for path in committed_levels() {
+        let rel = path
+            .strip_prefix(repo())
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        let bytes = std::fs::read(&path).expect("a committed level reads");
+        let record = RuntimeLevel::decode(&bytes)
+            .unwrap_or_else(|e| panic!("decode {rel}: {e}"))
+            .settings
+            .render;
+        let (shipped, ship_tier) = inf_player::render::shipped_settings(&gpu, record);
+        let (editor, edit_tier) = editor_settings(&gpu, record);
+        assert_eq!(
+            edit_tier, ship_tier,
+            "{rel}: the editor viewport detects tier {edit_tier:?} and the shipped \
+             player {ship_tier:?} on one adapter"
+        );
+        assert_eq!(
+            editor, shipped,
+            "{rel}: the editor viewport and the shipped player would render this \
+             level with different settings.\n\neditor:\n{editor:#?}\n\nshipped:\n{shipped:#?}"
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked, EXPECTED_LEVELS,
+        "the census walked {checked} levels, not {EXPECTED_LEVELS}"
+    );
+    // Anti-vacuity: the lit levels must not be comparing two copies of the
+    // DEFAULT settings, which would pass however wrong both hosts were.
+    let island = record_of(LIT_LEVELS[0]);
+    let (lit, _) = inf_player::render::shipped_settings(&gpu, island);
+    assert!(
+        lit.gi.enabled && lit.shadows.enabled,
+        "the island's settings reached neither host with GI or shadows on \
+         (tier {:?}) — this arm would then be comparing two defaults",
+        detect_tier(&gpu, &RenderSettings::default())
+    );
+    println!(
+        "FIX3 clause 2: {checked} committed levels, editor viewport == shipped player, \
+         field for field, on tier {:?}",
+        detect_tier(&gpu, &RenderSettings::default())
+    );
+}
+
+/// **The transcription above is the editor viewport's own chain**, verbatim.
+///
+/// A source gate, because the thing it guards cannot be reached without the
+/// editor crate: `inf-viewport` is Ring 1 and `inf-player` is Ring 2, and
+/// neither depends on the other. Read as text — the instrument
+/// `apply_record_mirror.rs` established for exactly this shape of claim.
+///
+/// Mutation-verified: dropping `caps.clamp_occlusion` from either the editor's
+/// source or the transcription fails this arm.
+#[test]
+fn the_transcribed_editor_chain_is_the_editor_viewports_own() {
+    const VIEWPORT: &str = include_str!("../../../editor/crates/inf-viewport/src/host.rs");
+    // The four load-bearing statements of `apply_render_settings`, in the order
+    // the transcription performs them. Whitespace-collapsed so a rustfmt run
+    // that rewraps a line does not fail a gate about a decision.
+    let code: String = VIEWPORT.split_whitespace().collect::<Vec<_>>().join(" ");
+    for needle in [
+        "detect_tier(&self.gpu, &RenderSettings::default())",
+        "let requested = requested_render_settings(&doc.settings().render);",
+        "let mapped = caps.clamp_occlusion(tier.apply(requested));",
+        "AdapterCaps::probe(&self.gpu)",
+    ] {
+        let want: String = needle.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            code.contains(&want),
+            "the editor viewport no longer does `{needle}`, so `editor_settings` in \
+             this file is a transcription of something that is not there any more"
+        );
+    }
+    // …and the request itself: vgeom on, nothing else touched.
+    for needle in [
+        "fn requested_render_settings(record: &RenderSettingsRecord) -> RenderSettings {",
+        "let base = apply_record(record);",
+        "vgeom: inf_render::VgeomSettings { enabled: true, ..base.vgeom },",
+    ] {
+        let want: String = needle.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            code.contains(&want),
+            "the editor viewport's request changed shape: `{needle}` is gone"
+        );
+    }
+    println!("FIX3 clause 2: the editor's four-statement chain is transcribed verbatim");
 }
