@@ -215,7 +215,13 @@ struct SkyShKey {
     sun: [u32; 3],
     irradiance: [u32; 3],
     gradient: [u32; 6],
+    /// Camera radius, sky exposure and the sun's disc — three fields and not a
+    /// mixed word. An earlier cut XOR-ed them together, which is a hash: two
+    /// different triples can share one key and the memo would hand back the
+    /// wrong sky in silence. A cache whose key can collide is not a cache.
     radius: u32,
+    sky_intensity: u32,
+    sun_disc: u32,
     enabled: bool,
 }
 
@@ -274,9 +280,12 @@ pub(crate) fn sky_irradiance_memo(
             gradient_zenith[1].to_bits(),
             gradient_zenith[2].to_bits(),
         ],
-        // The sky exposure rides here rather than in `medium` because it scales
-        // the answer without changing the march.
-        radius: r_km.to_bits() ^ p.sky_intensity.to_bits() ^ p.sun_disc_deg.to_bits(),
+        radius: r_km.to_bits(),
+        // The sky exposure is not part of `medium` because it scales the answer
+        // without changing the march; the disc is, because
+        // `horizon_visibility` reads it.
+        sky_intensity: p.sky_intensity.to_bits(),
+        sun_disc: p.sun_disc_deg.to_bits(),
         enabled: p.enabled,
     };
     static MEMO: std::sync::Mutex<Option<(SkyShKey, [[f32; 3]; 4])>> = std::sync::Mutex::new(None);
