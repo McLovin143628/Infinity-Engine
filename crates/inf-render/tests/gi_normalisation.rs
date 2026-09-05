@@ -482,9 +482,8 @@ fn dynamic_gi_lights_a_daylight_street_rather_than_washing_it_out() {
     // row, and it is what the lift is measured from.
     let (p95_off, hot_off) = street_shot(&gpu, None);
     let (p95_on, hot_on) = street_shot(&gpu, Some(1.0));
-    // The control: putting π back into the intensity is EXACTLY the arithmetic
-    // this wave removed from `gi_irradiance`, so this row IS the frame as it
-    // shipped — the same scene, the same post chain, the old units.
+    // The row EDIT1 controlled with: putting π back into the intensity was
+    // EXACTLY the arithmetic that wave removed from `gi_irradiance`.
     let (p95_old, hot_old) = street_shot(&gpu, Some(std::f32::consts::PI));
     println!("EDIT1 clause 0 - the lit street under `lit_showcase`");
     // Aligned with width specifiers rather than runs of spaces inside the
@@ -504,7 +503,7 @@ fn dynamic_gi_lights_a_daylight_street_rather_than_washing_it_out() {
         Some((p95_off, hot_off)),
     );
     row(
-        "GI on, intensity pi  SHIPPED",
+        "GI on, intensity pi",
         p95_old,
         hot_old,
         Some((p95_off, hot_off)),
@@ -519,12 +518,43 @@ fn dynamic_gi_lights_a_daylight_street_rather_than_washing_it_out() {
         "GI pushed {:.4} more of the frame over 240, past {GI_CLIPPED_LIFT_CEILING}",
         hot_on - hot_off
     );
-    // ...and the control must FAIL the same ceilings, or they are not measuring
-    // anything. The falsification, inside the arm.
+    // **THE FALSIFICATION LEFT THIS FILE IN WAVE FIX3, AND THAT IS A RESULT.**
+    //
+    // EDIT1 ended here with `assert!(p95_old - p95_off > CEILING || ...)` — the
+    // π row had to TRIP the ceilings, or they were not measuring anything. It
+    // does not any more, and the reason is the shape of the fix rather than a
+    // weakening: since FIX3 the ambient's SCALE is set by `sky_irradiance`,
+    // which `gi_intensity` does not touch, and what `gi_intensity` multiplies is
+    // a signed DIFFERENCE from the open sky — so π darkens the occluded half
+    // exactly as fast as it brightens the bounce. Measured on this street: the π
+    // row lifts p95 by **+13.1** where it lifted it by +49.4 before, and clips
+    // nothing at all. "π times the ambient" is no longer a state this renderer
+    // can be put in from a fixture.
+    //
+    // Every remaining way to wash the street out needs a SHADER edit, so the
+    // falsification moved to mutation plus source gates, and both were measured
+    // rather than argued. Mutating `gi_probes.wgsl` back to the pre-FIX3 gather
+    // — `ndl = 1.0` and the sky restored to the miss term, i.e. the cosine gone
+    // and the sky counted twice — and changing nothing else:
+    //
+    // ```text
+    //   GI on, intensity 1.0   p95 221.6   lift +28.4 / +0.0000
+    //   GI on, intensity pi    p95 243.9   lift +50.7 / +0.1393   <- trips BOTH
+    // ```
+    //
+    // So the ceilings still see the defect they were built for; what changed is
+    // that reaching it needs the shader. The two lines that would do it are
+    // pinned by `inf_render::passes::gi::sky_sh_tests::the_probe_miss_term_is_
+    // zero`, and the magnitude of the ambient itself — in BOTH directions, since
+    // that arm has a maximum as well as a minimum — by
+    // `tests/sky_ambient.rs`.
+    //
+    // What stays here is the non-vacuity check EDIT1's control also provided:
+    // these ceilings must not be met by a renderer in which switching GI on does
+    // nothing at all.
     assert!(
-        p95_old - p95_off > GI_P95_LIFT_CEILING || hot_old - hot_off > GI_CLIPPED_LIFT_CEILING,
-        "the pre-EDIT1 normalisation cleared the ceilings too (p95 lift {:.1}, clipped lift {:.4}) - this arm cannot see the defect it was written for",
-        p95_old - p95_off,
-        hot_old - hot_off
+        (p95_on - p95_off).abs() > 1.0,
+        "switching dynamic GI on moved this street's p95 by {:.2} levels — the \n         ceilings above would be met by a renderer with no GI in it",
+        p95_on - p95_off
     );
 }

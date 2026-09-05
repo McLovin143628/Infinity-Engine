@@ -4909,8 +4909,58 @@ fn golden_gi_terrain() {
         region_mean(&img, band.0.clone(), band.1.clone()) > 100.0,
         "the measured band is not the lit wall"
     );
+
+    // **The two things a red floor does to a white wall**, measured per channel
+    // rather than as one ratio — wave FIX3.
+    //
+    // The threshold here used to be a ratio lift of 0.10, and the lift measured
+    // at `e8451338` was **+0.257** (1.226 against 0.969). It is **+0.027** now,
+    // and the cause is a physics fix rather than a regression: the probe march's
+    // bounce carries a **cosine** since FIX3 (the ray's own direction is the hit
+    // face's normal proxy), where before it handed every voxel full
+    // normal-incidence sun — EDIT1's carried "GI bounce has no n·l", closed.
+    // Measured on this very fixture by putting `ndl = 1.0` back into
+    // `gi_probes.wgsl` and changing nothing else: the lift goes straight to
+    // **+0.331**. The old number was the over-estimate, not the signal.
+    //
+    // So the arm reads the two channels instead, where the effect is not one
+    // small ratio but two large, independent numbers:
+    //
+    //   red   182.30 -> 177.23   (a drop of 5.07)
+    //   green 184.35 -> 174.51   (a drop of 9.85)
+    //
+    // Adding the ground makes the wall DARKER, because a wall standing on
+    // something receives less sky than one floating in an open sphere of it —
+    // that is the `-sky` term the FIX3 probe march subtracts, and it is the
+    // occlusion the sky-irradiance term would otherwise have handed out for
+    // free. And it makes it darker **twice as fast in green as in red**, which
+    // is the red albedo coming back. A terrain that reached the voxelizer with
+    // no albedo would fail the second assert; one that never reached it at all
+    // would fail the first.
+    let px_band = (band.0.start, band.1.start, band.0.end, band.1.end);
+    let ch =
+        |img: &[u8], c: usize| mean_channel(img, c, px_band.0, px_band.1, px_band.2, px_band.3);
+    let red_drop = ch(&bare, 0) - ch(&img, 0);
+    let green_drop = ch(&bare, 1) - ch(&img, 1);
+    eprintln!(
+        "gi_terrain wall channels: red {:.2} -> {:.2} ({red_drop:+.2}), green {:.2} -> {:.2} ({green_drop:+.2})",
+        ch(&bare, 0),
+        ch(&img, 0),
+        ch(&bare, 1),
+        ch(&img, 1)
+    );
     assert!(
-        red_with > red_without + 0.10,
+        green_drop > 3.0,
+        "the terrain did not occlude any of the sky the wall was receiving \
+         (green {green_drop:+.2} of 255) — terrain is invisible to GI"
+    );
+    assert!(
+        green_drop > red_drop * 1.4,
+        "the terrain blocked sky without returning any red (green {green_drop:+.2} \
+         against red {red_drop:+.2}) — its ALBEDO is invisible to GI"
+    );
+    assert!(
+        red_with > red_without + 0.02,
         "the terrain did not bounce red onto the wall \
          (with {red_with:.3} vs without {red_without:.3}) — terrain is invisible to GI"
     );
