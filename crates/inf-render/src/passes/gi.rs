@@ -178,6 +178,43 @@ pub struct GiDataGpu {
     /// so a matrix added here reaches exactly the shaders that need it and
     /// changes no other pass's uniform layout.
     pub prev_view_proj: [f32; 16],
+
+    // ── the sky's own irradiance (wave FIX3) ──────────────────────────────
+    //
+    // Four L1 spherical-harmonic coefficients (`rgb` per lane, `w` reserved) of
+    // the sky's radiance over the whole sphere, projected once per frame by
+    // `crate::atmosphere::sky_irradiance_sh` from the SAME medium the sky pass
+    // draws — or, for a scene with no time-of-day authority, from its authored
+    // `SkyParams` gradient.
+    //
+    // **Why it rides in the GI uniform.** Two reasons, and the second is the
+    // load-bearing one:
+    //
+    //  1. This uniform is bound by every lit pass (`EnvBinding`) and by nothing
+    //     else, so an ambient term added here reaches every lit shader for zero
+    //     new bindings — and the env group has no room for a fifth fragment
+    //     storage buffer (`passes::visbuffer` asserts the four it already
+    //     spends against `Limits::default()`'s eight).
+    //  2. `env_lighting.wgsl` is composed BEFORE the atmosphere library, and
+    //     WGSL has no forward declarations. `sky_irradiance` has to sit beside
+    //     `gi_irradiance` — the term it is added to, and whose folded cosine
+    //     lobe it shares — so its data has to be reachable there. `atmos` is
+    //     not; `gi` is.
+    //
+    // It also puts it beside the two lanes it supersedes: `sky_zenith` /
+    // `sky_horizon` are the probe march's own two-colour approximation of this
+    // same sky, and the day the march stops needing them they can go.
+    pub sky_sh: [[f32; 4]; 4],
+}
+
+/// Pad an SH triple set into the uniform's `vec4` lanes.
+fn sky_sh_lanes(c: [[f32; 3]; 4]) -> [[f32; 4]; 4] {
+    [
+        [c[0][0], c[0][1], c[0][2], 0.0],
+        [c[1][0], c[1][1], c[1][2], 0.0],
+        [c[2][0], c[2][1], c[2][2], 0.0],
+        [c[3][0], c[3][1], c[3][2], 0.0],
+    ]
 }
 
 impl GiDataGpu {
@@ -200,6 +237,11 @@ impl GiDataGpu {
             sched: [0.0; 4],
             ssr: [0.0; 4],
             prev_view_proj: [0.0; 16],
+            // GI off ⇒ the ambient term keeps the hemispheric constant, so the
+            // consumer never reads these. See `sky_irradiance` in
+            // `shaders/env_lighting.wgsl` for the gate and the ledger for why
+            // this wave did not widen it.
+            sky_sh: [[0.0; 4]; 4],
         }
     }
 
@@ -1283,6 +1325,31 @@ impl RenderNode for GiNode {
             ],
             ssr: [0.0; 4],
             prev_view_proj: [0.0; 16],
+            // **The SKY's sun, not the probe march's.** The two lines above
+            // take the first analytic directional light, because that is what
+            // actually lights the voxels a probe ray hits. The sky is lit by
+            // `scene.sun` — the projected time-of-day body the sky pass draws
+            // from and `AtmosphereGpu::build` bakes the LUT for — so the
+            // ambient and the sky the player can see behind it can never
+            // disagree about where the sun is. One door, and it is the sky's.
+            sky_sh: sky_sh_lanes(crate::passes::sky_lut::sky_irradiance_memo(
+                &frame.scene.atmosphere,
+                crate::atmosphere::camera_radius_km(
+                    &frame.scene.atmosphere,
+                    frame.view.eye_world.y as f32,
+                ),
+                frame.scene.sun.unit_direction().into(),
+                {
+                    let i = frame.scene.sun.intensity.max(0.0);
+                    [
+                        frame.scene.sun.color[0] * i,
+                        frame.scene.sun.color[1] * i,
+                        frame.scene.sun.color[2] * i,
+                    ]
+                },
+                sky.horizon,
+                sky.zenith,
+            )),
         }
         .with_ssr(frame);
         gpu.queue
@@ -1503,5 +1570,116 @@ mod boundary_tests {
                  shader that has nothing to keep out of its ambient term"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod sky_sh_tests {
+    /// The body of the WGSL function named `sig`, from its opening brace to the
+    /// matching close, with whitespace collapsed. `lines()` rather than a
+    /// newline search, so the extraction survives a Windows CRLF checkout (the
+    /// P22 law).
+    fn body(src: &str, sig: &str, what: &str) -> String {
+        let at = src
+            .find(sig)
+            .unwrap_or_else(|| panic!("{what}: no `{sig}`"));
+        let open = src[at..]
+            .find('{')
+            .expect("a signature is followed by a brace")
+            + at;
+        let mut depth = 0usize;
+        let mut end = open;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(end > open, "{what}: unbalanced braces");
+        src[open + 1..end]
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
+    }
+
+    /// **THE MIRROR THE COMMENT PROMISES** (wave FIX3).
+    ///
+    /// `sky_irradiance` exists twice — once in `env_lighting.wgsl`, where six
+    /// lit passes read it, and once in `gi_probes.wgsl`, where the probe march
+    /// uses it to light the surfaces its rays hit. They cannot share a snippet:
+    /// each file declares its own `GiData` (the probe pass binds the uniform at
+    /// `@group(0)`, the lit passes at their env group) and WGSL has no forward
+    /// declarations, so a shared fragment would have to be composed before a
+    /// struct that does not exist yet.
+    ///
+    /// A comment saying "keep these identical" is not a pin — the VIS1a audit's
+    /// ruling, met again. If the two drift, a probe's idea of how bright the sky
+    /// is stops being the shading surface's, and the `-sky` correction in the
+    /// march stops cancelling the `+sky` in the shader: the frame would be lit
+    /// twice in some directions and not at all in others.
+    ///
+    /// Mutation-verified: changing `0.66666667` to `0.6667` in either copy fails
+    /// this arm.
+    #[test]
+    fn the_two_sky_irradiance_bodies_are_the_same() {
+        const ENV: &str = include_str!("../shaders/env_lighting.wgsl");
+        const PROBES: &str = include_str!("../shaders/gi_probes.wgsl");
+        let sig = "fn sky_irradiance(n: vec3<f32>) -> vec3<f32>";
+        let a = body(ENV, sig, "env_lighting.wgsl");
+        let b = body(PROBES, sig, "gi_probes.wgsl");
+        assert!(
+            a.contains("sky_sh0") && a.contains("0.66666667"),
+            "the extraction is broken, so an empty comparison would pass: {a:?}"
+        );
+        assert_eq!(
+            a, b,
+            "the two `sky_irradiance` copies have drifted. The probe march's
+             `-sky` correction and the lit passes' `+sky` term would stop
+             cancelling.
+
+env_lighting:
+{a}
+
+gi_probes:
+{b}"
+        );
+    }
+
+    /// The probe march must not gather the sky on a miss any more — that is the
+    /// whole no-double-count ruling, and it is one line that a future edit could
+    /// put back without any test noticing.
+    #[test]
+    fn the_probe_miss_term_is_zero() {
+        const PROBES: &str = include_str!("../shaders/gi_probes.wgsl");
+        let code: String = PROBES
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(
+            code.contains("radiance = vec3<f32>(0.0);"),
+            "the probe march no longer zeroes its miss term"
+        );
+        assert!(
+            code.contains("radiance = radiance - gi_sky_radiance(dir);"),
+            "the probe march no longer subtracts the sky it blocks — the lit
+             passes add the whole sky, so without this the open sky is counted
+             twice"
+        );
     }
 }

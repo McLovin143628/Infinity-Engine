@@ -43,6 +43,16 @@ struct GiData {
     // this frame's depth is sampled from the colour buffer at the place it
     // occupied when that colour was written.
     prev_view_proj: mat4x4<f32>,
+    // Wave FIX3: the L1 spherical-harmonic projection of THE SKY's own radiance
+    // over the whole sphere (rgb per lane, w unused), computed on the CPU by
+    // `crate::atmosphere::sky_irradiance_sh` from the same medium the sky pass
+    // draws. It is the ambient every shaded surface receives, at any distance
+    // from the camera and with no probe volume in the way; `sky_irradiance`
+    // below is its consumer. Mirrored in `gi_probes.wgsl`.
+    sky_sh0: vec4<f32>,
+    sky_sh1: vec4<f32>,
+    sky_sh2: vec4<f32>,
+    sky_sh3: vec4<f32>,
 };
 
 @group(GROUP_ENV) @binding(0) var ao_tex: texture_2d<f32>;
@@ -239,7 +249,7 @@ fn gi_fetch_sh(world_pos: vec3<f32>) -> mat4x3<f32> {
 // radiance; after, 1.0. The five GI goldens hold their images by carrying `π` in
 // their authored `intensity`, which is itself the proof that the change is
 // exactly a scale and touches nothing else.
-fn gi_irradiance(world_pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+fn gi_indirect(world_pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     let c = gi_fetch_sh(world_pos);
     let b = sh_basis(n);
     // Cosine-lobe convolution (Ramamoorthi) with the Lambert 1/π folded in:
@@ -247,7 +257,91 @@ fn gi_irradiance(world_pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     let a0 = 1.0;
     let a1 = 0.66666667;
     let e = a0 * c[0] * b.x + a1 * (c[1] * b.y + c[2] * b.z + c[3] * b.w);
-    return max(e, vec3<f32>(0.0)) * gi.params.y;
+    // **No clamp here since wave FIX3.** This term is a DIFFERENCE and it is
+    // meant to be able to go negative; the clamp lives at the call site, on the
+    // sum with `sky_irradiance`, which is the quantity that has to be a
+    // radiance. Clamping here would throw away exactly the occlusion.
+    return e * gi.params.y;
+}
+
+// ── the sky's own irradiance (wave FIX3) ────────────────────────────────────
+//
+// **THE AMBIENT TERM THIS ENGINE DID NOT HAVE.**
+//
+// Before this wave a shaded surface was lit by `gi_irradiance` or by a
+// hard-coded hemispheric constant, and by nothing else. The probe field is a
+// **40 m box centred on the camera** (`GiSettings::extent`), so:
+//
+//   * a wall beyond the box reads a clamped boundary probe, which is a probe
+//     about somewhere else;
+//   * a wall inside it, close enough that the probes around it are *in* it,
+//     reads probes whose every ray hit that same unlit wall;
+//   * and trilinear interpolation drags a surface toward any of its eight
+//     probes that happens to sit inside geometry, which reads as black.
+//
+// Measured, through the whole renderer, in `tests/sky_ambient.rs`: a white
+// wall's shaded face read **0.0129** of its sunlit face under a clear noon sky
+// with GI on, against the **0.1–0.2** a clear sky actually delivers. The
+// FIX2 audit's photograph of that number is a hero at 1.8/255 in Play with a
+// building's shaded wall at 8.5.
+//
+// So the sky becomes a term of its own: the cosine-weighted hemisphere of the
+// *actual* sky, projected to L1 on the CPU once per frame from the same medium
+// the sky pass draws (`crate::atmosphere::sky_irradiance_sh`), reaching every
+// lit shader through this include. It has no volume, no convergence transient
+// and no distance limit, because it is a property of the sky rather than of
+// where the camera is standing.
+//
+// # How it composes with the probe field, exactly
+//
+// The two would double-count the sky if both carried it — an open field would
+// be lit twice. So the probe march's **miss term is now zero and its hit term
+// carries a `-sky` correction** (`gi_probes.wgsl`), which makes the probe field
+// the *difference* between the world with geometry in it and the open sky:
+//
+// ```text
+//     ambient = sky_irradiance(n)  +  Σ_hit (bounce - blocked sky)
+//             = (the open sky)     -  (the sky the geometry blocks)  +  bounce
+// ```
+//
+// which is the correct occluded sky plus the bounce, to the quadrature, with
+// nothing counted twice and no occlusion thrown away. It is also why the term
+// above is signed: a probe inside a closed room gathers `-sky` in nearly every
+// direction, and the sum is the small bounce that is really there.
+//
+// Same units and the same folded cosine lobe as `gi_indirect`, so on a uniform
+// sky of radiance `L` an albedo-1 Lambert surface leaves exactly `L` — the
+// white furnace, asserted on the CPU by
+// `atmosphere::tests::a_uniform_sky_projects_to_its_own_radiance` and through
+// the renderer by `tests/gi_normalisation.rs`.
+fn sky_irradiance(n: vec3<f32>) -> vec3<f32> {
+    let b = sh_basis(n);
+    return gi.sky_sh0.rgb * b.x
+        + 0.66666667 * (gi.sky_sh1.rgb * b.y + gi.sky_sh2.rgb * b.z + gi.sky_sh3.rgb * b.w);
+}
+
+// Sky RADIANCE along `d` from the same L1 set, sharpened by `lobe` — the
+// specular twin of `sky_irradiance`, and the term that gives `gi_specular` back
+// the sky the probe field stopped carrying. Signed, like its neighbours; the
+// caller clamps the sum.
+fn sky_sh_radiance(d: vec3<f32>, lobe: f32) -> vec3<f32> {
+    let b = sh_basis(d);
+    return gi.sky_sh0.rgb * b.x
+        + lobe * (gi.sky_sh1.rgb * b.y + gi.sky_sh2.rgb * b.z + gi.sky_sh3.rgb * b.w);
+}
+
+// **The one door for "what does a shaded surface receive"** (wave FIX3). Every
+// lit pass spells its ambient as this call, so the composition of the sky term
+// and the probe field is written once rather than six times.
+//
+// `fallback` is the pass's own hemispheric constant, used when the level has
+// not asked for a computed ambient (`GiSettings::enabled`) — which is what
+// keeps every GI-off golden byte-identical.
+fn ambient_irradiance(world_pos: vec3<f32>, n: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
+    if (gi.params.x > 0.5) {
+        return max(sky_irradiance(n) + gi_indirect(world_pos, n), vec3<f32>(0.0));
+    }
+    return fallback;
 }
 
 // ── P18.4 specular ──────────────────────────────────────────────────────────
@@ -260,9 +354,17 @@ fn gi_irradiance(world_pos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
 // identity on a constant field: a probe that saw uniform radiance L reconstructs
 // exactly L. That is why the specular term below reduces to the flat
 // `amb * f0 * 0.5` it replaced instead of being a new light source.
-fn gi_sh_radiance(c: mat4x3<f32>, d: vec3<f32>, lobe: f32) -> vec3<f32> {
+// The reconstruction without the clamp (wave FIX3). The probe field is a signed
+// difference now, so a caller that adds the sky term to it has to add before
+// clamping or it clamps away the occlusion. Declared first because WGSL has no
+// forward declarations.
+fn gi_sh_radiance_signed(c: mat4x3<f32>, d: vec3<f32>, lobe: f32) -> vec3<f32> {
     let b = sh_basis(d);
-    return max(c[0] * b.x + lobe * (c[1] * b.y + c[2] * b.z + c[3] * b.w), vec3<f32>(0.0));
+    return c[0] * b.x + lobe * (c[1] * b.y + c[2] * b.z + c[3] * b.w);
+}
+
+fn gi_sh_radiance(c: mat4x3<f32>, d: vec3<f32>, lobe: f32) -> vec3<f32> {
+    return max(gi_sh_radiance_signed(c, d, lobe), vec3<f32>(0.0));
 }
 
 // The dominant light direction of an L1 SH set (per-channel luma of the linear
@@ -465,7 +567,16 @@ fn gi_specular(world_pos: vec3<f32>, n: vec3<f32>, v: vec3<f32>, rough: f32, f0:
     let c = gi_fetch_sh(world_pos);
     // A rough surface integrates the lobe away; a smooth one keeps it.
     let lobe = clamp(1.0 - rough, 0.0, 1.0);
-    let radiance = gi_sh_radiance(c, r, lobe) * gi.params.y;
+    // **The sky half is explicit since wave FIX3.** The probe field no longer
+    // carries the sky (see `sky_irradiance`), so a reflection that read only
+    // the probes would have lost it — a wet road would reflect the buildings
+    // and not the sky above them. Reconstructed from the same L1 set the
+    // diffuse ambient uses and added before the clamp, because the probe term
+    // is signed and its negative half IS the sky this surface cannot see.
+    let radiance = max(
+        gi_sh_radiance_signed(c, r, lobe) * gi.params.y + sky_sh_radiance(r, lobe),
+        vec3<f32>(0.0),
+    );
     let ab = gi_env_brdf_ab(rough, clamp(dot(n, v), 0.0, 1.0));
     // **No π here either, since wave EDIT1.** This term carried a `GI_PI` whose
     // only job was to match `gi_irradiance`'s π·L convention — the comment said

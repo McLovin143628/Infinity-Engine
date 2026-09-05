@@ -207,10 +207,102 @@ pub struct AtmosphereGpu {
     pub precip_wind: [f32; 4],
 }
 
+/// What the sky's irradiance is a function of — the memo key below, as raw bit
+/// patterns so two calls in one frame hash identical rather than nearly so.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SkyShKey {
+    medium: [u32; 16],
+    sun: [u32; 3],
+    irradiance: [u32; 3],
+    gradient: [u32; 6],
+    radius: u32,
+    enabled: bool,
+}
+
+/// **The one memo in this file, and why it earns its place.**
+///
+/// [`crate::atmosphere::sky_irradiance_sh`] marches 48 directions through the
+/// medium; measured at **0.095 ms** (`atmosphere::tests::sky_sh_is_cheap`). That
+/// is 0.6 % of a 60 Hz frame — small, and paid two or three times per frame,
+/// because [`AtmosphereGpu::build`] is called by the LUT node *and* re-derived
+/// by the cloud node to read its cache keys out. Worse, it would be paid on
+/// every frame of a scene whose sun has not moved, which is most of them.
+///
+/// The memo is keyed on the exact bits of everything the integral reads, so it
+/// returns the identical answer the uncached call would: this is a cache, not an
+/// approximation, and the determinism gates cannot tell it is here. One entry is
+/// enough — the two or three calls in a frame share one key, and a moving sun
+/// re-marches once per frame, which is the cost the feature is worth.
+pub(crate) fn sky_irradiance_memo(
+    p: &AtmosphereParams,
+    r_km: f32,
+    sun: [f32; 3],
+    sun_irradiance: [f32; 3],
+    gradient_horizon: [f32; 3],
+    gradient_zenith: [f32; 3],
+) -> [[f32; 3]; 4] {
+    let key = SkyShKey {
+        medium: [
+            p.rayleigh_scattering[0].to_bits(),
+            p.rayleigh_scattering[1].to_bits(),
+            p.rayleigh_scattering[2].to_bits(),
+            p.rayleigh_height.to_bits(),
+            p.mie_scattering_scaled().to_bits(),
+            p.mie_absorption_scaled().to_bits(),
+            p.mie_height.to_bits(),
+            p.mie_g.to_bits(),
+            p.ozone_absorption[0].to_bits(),
+            p.ozone_absorption[1].to_bits(),
+            p.ozone_absorption[2].to_bits(),
+            p.ozone_center.to_bits(),
+            p.ozone_half_width.to_bits(),
+            p.ground_radius.to_bits(),
+            p.top_radius.to_bits(),
+            p.ground_albedo.to_bits(),
+        ],
+        sun: [sun[0].to_bits(), sun[1].to_bits(), sun[2].to_bits()],
+        irradiance: [
+            sun_irradiance[0].to_bits(),
+            sun_irradiance[1].to_bits(),
+            sun_irradiance[2].to_bits(),
+        ],
+        gradient: [
+            gradient_horizon[0].to_bits(),
+            gradient_horizon[1].to_bits(),
+            gradient_horizon[2].to_bits(),
+            gradient_zenith[0].to_bits(),
+            gradient_zenith[1].to_bits(),
+            gradient_zenith[2].to_bits(),
+        ],
+        // The sky exposure rides here rather than in `medium` because it scales
+        // the answer without changing the march.
+        radius: r_km.to_bits() ^ p.sky_intensity.to_bits() ^ p.sun_disc_deg.to_bits(),
+        enabled: p.enabled,
+    };
+    static MEMO: std::sync::Mutex<Option<(SkyShKey, [[f32; 3]; 4])>> = std::sync::Mutex::new(None);
+    let mut slot = MEMO.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((k, v)) = slot.as_ref() {
+        if *k == key {
+            return *v;
+        }
+    }
+    let v = crate::atmosphere::sky_irradiance_sh(
+        p,
+        r_km,
+        sun,
+        sun_irradiance,
+        gradient_horizon,
+        gradient_zenith,
+    );
+    *slot = Some((key, v));
+    v
+}
+
 impl AtmosphereGpu {
     /// The `enabled = 0` block every pre-P17.2 scene renders under. The medium
     /// values are still the physical ones so a debugger shows something sane, but
     /// nothing reads them.
+    ///
     pub fn disabled() -> Self {
         Self::build(
             &AtmosphereParams::default(),

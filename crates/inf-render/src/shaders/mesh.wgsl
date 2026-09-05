@@ -79,7 +79,7 @@ struct Lights {
 
 // AO + cascaded shadows + dynamic GI ride the shared env bind group at @group(2)
 // (declared in env_lighting.wgsl, prepended by `lit_scene_shader`): `ao_tex`/`ao_smp`
-// (SSAO, white when off), `shadow_factor()`, and `gi_irradiance()`.
+// (SSAO, white when off), `shadow_factor()`, and `ambient_irradiance()`.
 
 const PI: f32 = 3.14159265359;
 
@@ -297,10 +297,15 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     // dynamic-GI probe irradiance when GI is on — modulated by the screen-space AO
     // (ambient term only — never the direct light above).
     let up = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
-    var amb = mix(vec3<f32>(0.03, 0.03, 0.035), vec3<f32>(0.10, 0.13, 0.18), up);
-    if (gi.params.x > 0.5) {
-        amb = gi_irradiance(in.world_pos, n);
-    }
+    // Wave FIX3: one door. The hemispheric constant is the fallback for a level
+    // that asked for no computed ambient; otherwise the sky's own irradiance
+    // plus the probe field's signed difference from it. See
+    // `ambient_irradiance` / `sky_irradiance` in `env_lighting.wgsl`.
+    let amb = ambient_irradiance(
+        in.world_pos,
+        n,
+        mix(vec3<f32>(0.03, 0.03, 0.035), vec3<f32>(0.10, 0.13, 0.18), up),
+    );
     // The material's own occlusion map multiplies the screen-space AO: both
     // modulate the AMBIENT term only, never the direct light above.
     let ao = textureSampleLevel(ao_tex, ao_smp, in.pos.xy / view.grid_axis_viewport.zw, 0.0).r

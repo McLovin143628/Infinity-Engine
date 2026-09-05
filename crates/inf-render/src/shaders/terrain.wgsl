@@ -66,7 +66,7 @@ struct BiomePalette {
 
 // AO + cascaded shadows + dynamic GI ride the shared env bind group at @group(3)
 // (declared in env_lighting.wgsl, prepended by `lit_scene_shader`): `ao_tex`/`ao_smp`
-// (SSAO, white when off), `shadow_factor()`, and `gi_irradiance()`.
+// (SSAO, white when off), `shadow_factor()`, and `ambient_irradiance()`.
 
 struct VIn {
     // Vertex: unit patch coordinates in [0,1]² + skirt flag (z = 1 on the
@@ -843,10 +843,15 @@ fn fs(in: VOut) -> @location(0) vec4<f32> {
     // Hemispheric ambient (sky above / ground below), or the dynamic-GI probe
     // irradiance when GI is on.
     let up = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
-    var ambient = mix(vec3<f32>(0.05, 0.06, 0.07), vec3<f32>(0.16, 0.20, 0.26), up);
-    if (gi.params.x > 0.5) {
-        ambient = gi_irradiance(in.world_local, n);
-    }
+    // Wave FIX3: one door, shared with the five mesh passes. The terrain's own
+    // hemispheric constant is brighter than theirs (it is ground, and ground
+    // sees more sky), and it stays the fallback for a level that asked for no
+    // computed ambient.
+    let ambient = ambient_irradiance(
+        in.world_local,
+        n,
+        mix(vec3<f32>(0.05, 0.06, 0.07), vec3<f32>(0.16, 0.20, 0.26), up),
+    );
     // A cheap roughness-aware specular glint (Blinn-ish): smoother layers (lower
     // roughness) get a tighter, brighter highlight, so roughness reads visibly.
     let view_dir = normalize(view.eye.xyz - in.world_local);

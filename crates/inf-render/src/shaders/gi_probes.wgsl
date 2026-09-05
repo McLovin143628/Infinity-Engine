@@ -37,6 +37,15 @@ struct GiData {
     sky_horizon: vec4<f32>,
     params2: vec4<f32>,
     sched: vec4<f32>,
+    // Declared through to the end since wave FIX3, because `sky_sh*` is at the
+    // tail and a uniform struct reads its buffer positionally. The two VIS1a
+    // lanes are unread here and named so the layout is legible.
+    ssr: vec4<f32>,
+    prev_view_proj: mat4x4<f32>,
+    sky_sh0: vec4<f32>,
+    sky_sh1: vec4<f32>,
+    sky_sh2: vec4<f32>,
+    sky_sh3: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> gi: GiData;
 @group(0) @binding(1) var<storage, read> voxels: array<u32>;
@@ -103,6 +112,19 @@ fn spiral_dir(i: u32, n: u32) -> vec3<f32> {
 
 fn sh_basis(d: vec3<f32>) -> vec4<f32> {
     return vec4<f32>(0.282095, 0.488603 * d.y, 0.488603 * d.z, 0.488603 * d.x);
+}
+
+// **MIRROR of `sky_irradiance` in `shaders/env_lighting.wgsl`** — kept
+// character-for-character with it and pinned by
+// `passes::gi::tests::the_two_sky_irradiance_bodies_are_the_same`. The two files
+// cannot share a snippet: each declares its own `GiData` (this pass binds the
+// uniform at `@group(0)`, the lit passes at their env group) and WGSL has no
+// forward declarations, so a shared fragment would have to be composed before a
+// struct that does not exist yet.
+fn sky_irradiance(n: vec3<f32>) -> vec3<f32> {
+    let b = sh_basis(n);
+    return gi.sky_sh0.rgb * b.x
+        + 0.66666667 * (gi.sky_sh1.rgb * b.y + gi.sky_sh2.rgb * b.z + gi.sky_sh3.rgb * b.w);
 }
 
 // March toward the sun from `p`; 0 if an occluder is hit before leaving the volume.
@@ -202,14 +224,52 @@ fn cs_probes(@builtin(global_invocation_id) gid: vec3<u32>) {
                 // hemisphere rather than by a factor of π, and it is a
                 // modelling approximation of single-bounce voxel GI rather than
                 // a unit error. Carried, with the number, in the ledger.
-                radiance = v.albedo * gi.sun_color.rgb * vis * (1.0 / PI) + v.emissive;
+                // **The surface the ray hit is lit by the sky too** (wave
+                // FIX3). Before this it was lit by the sun and by nothing
+                // else, so every wall facing away from the sun bounced
+                // EXACTLY ZERO — and on a street, where most of a probe's rays
+                // end on a wall, that is most of the gather. It is the
+                // mechanism behind the FIX2 audit's photograph: a hero two
+                // metres from a shaded building, whose nearest probes see that
+                // building and nothing else, lit by the sum of a set of blacks.
+                //
+                // The voxel still carries no normal, so the ray's own
+                // direction is the proxy: a ray travelling along `dir` can only
+                // have struck a face pointing back along `-dir`. That is exact
+                // for a flat surface met head-on and an over-estimate at
+                // grazing incidence, and it is what finally puts the **cosine**
+                // on the sun term — EDIT1's carried "GI bounce has no n·l",
+                // closed here with the same proxy that pays for the sky.
+                let nh = -dir;
+                let ndl = max(dot(nh, normalize(gi.sun_dir.xyz)), 0.0);
+                let incident = gi.sun_color.rgb * vis * ndl * (1.0 / PI)
+                    + max(sky_irradiance(nh), vec3<f32>(0.0));
+                radiance = v.albedo * incident + v.emissive;
                 hit = true;
                 break;
             }
             pos = pos + dir * vsize;
         }
-        if (!hit) {
-            radiance = gi_sky_radiance(dir);
+        // **The probe field is a DIFFERENCE from the open sky since wave FIX3.**
+        //
+        // The lit passes now add `sky_irradiance(n)` — the whole unoccluded sky
+        // — to this gather, so a gather that also carried the sky would light an
+        // open field twice. What this field carries instead is what the geometry
+        // CHANGES: the bounce it adds, minus the sky it blocks.
+        //
+        // ```text
+        //     ambient = sky_irradiance(n) + Σ_hit (bounce - blocked sky)
+        //             = Σ_miss sky + Σ_hit bounce
+        // ```
+        //
+        // which is the same integral the pre-FIX3 gather computed, to the
+        // quadrature — occlusion intact, nothing counted twice — and it is the
+        // reason `gi_indirect` is no longer clamped at zero: a probe inside a
+        // closed room legitimately gathers `-sky` in nearly every direction.
+        if (hit) {
+            radiance = radiance - gi_sky_radiance(dir);
+        } else {
+            radiance = vec3<f32>(0.0);
         }
         let b = sh_basis(dir);
         c0 = c0 + radiance * b.x;

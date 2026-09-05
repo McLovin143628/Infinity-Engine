@@ -533,10 +533,15 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     }
 
     let up = clamp(n.y * 0.5 + 0.5, 0.0, 1.0);
-    var amb = mix(vec3<f32>(0.03, 0.03, 0.035), vec3<f32>(0.10, 0.13, 0.18), up);
-    if (gi.params.x > 0.5) {
-        amb = gi_irradiance(in.world_pos, n);
-    }
+    // Wave FIX3: one door. The hemispheric constant is the fallback for a level
+    // that asked for no computed ambient; otherwise the sky's own irradiance
+    // plus the probe field's signed difference from it. See
+    // `ambient_irradiance` / `sky_irradiance` in `env_lighting.wgsl`.
+    let amb = ambient_irradiance(
+        in.world_pos,
+        n,
+        mix(vec3<f32>(0.03, 0.03, 0.035), vec3<f32>(0.10, 0.13, 0.18), up),
+    );
     let ao = textureSampleLevel(ao_tex, ao_smp, in.pos.xy / view.grid_axis_viewport.zw, 0.0).r;
     lo += amb * albedo * (1.0 - metallic) * ao;
     lo += gi_ambient_specular(in.world_pos, n, v, rough, f0, amb) * ao;
