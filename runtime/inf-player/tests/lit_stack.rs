@@ -493,5 +493,49 @@ fn the_transcribed_editor_chain_is_the_editor_viewports_own() {
             "the editor viewport's request changed shape: `{needle}` is gone"
         );
     }
+    // **AND THE OTHER HALF OF THE SENTENCE** (FIX3 audit). The doc above says
+    // this arm is mutation-verified against "dropping `caps.clamp_occlusion`
+    // from either the editor's source or the transcription". Only the first was
+    // true: everything up to here reads `host.rs`, and nothing read
+    // `editor_settings`. Measured at the audit — dropping `clamp_occlusion`
+    // from the transcription alone left this whole binary green, because on an
+    // adapter that supports everything `clamp_occlusion` clamps nothing, so the
+    // field-for-field arm could not see it either (and on an adapterless CI leg
+    // that arm SKIPs).
+    //
+    // So the transcription is pinned to the statements it transcribes, from
+    // this file's own source. `include_str!` resolves against this file's
+    // directory, and the body is bounded by the next `fn` so a later helper
+    // cannot satisfy the scan on `editor_settings`' behalf — the P23 ruling
+    // about reading a SCOPE rather than a file.
+    const SELF: &str = include_str!("lit_stack.rs");
+    let at = SELF
+        .find("fn editor_settings(gpu: &GpuContext, record: RenderSettingsRecord)")
+        .expect("this file defines `editor_settings`");
+    let rest = &SELF[at..];
+    let end = rest[1..].find("\nfn ").map_or(rest.len(), |i| i + 1);
+    let body: String = rest[..end].split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        body.len() > 200,
+        "the `editor_settings` extraction is {} bytes — a broken scan would pass \
+         every clause below",
+        body.len()
+    );
+    for needle in [
+        "let base = inf_player::render::apply_record(&record);",
+        "let tier = detect_tier(gpu, &RenderSettings::default());",
+        "let caps = AdapterCaps::probe(gpu);",
+        "enabled: true,",
+        "(caps.clamp_occlusion(tier.apply(requested)), tier)",
+    ] {
+        let want: String = needle.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            body.contains(&want),
+            "`editor_settings` no longer does `{needle}`, so this file's copy of \
+             the editor viewport's chain has drifted from the chain it is pinned \
+             against above — and the field-for-field arm can only notice on an \
+             adapter where the missing step actually clamps something"
+        );
+    }
     println!("FIX3 clause 2: the editor's four-statement chain is transcribed verbatim");
 }
