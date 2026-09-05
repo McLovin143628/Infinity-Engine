@@ -33757,3 +33757,438 @@ editor frame beside it: the street reproduced and so did the light.
     FIX2 caused it and nothing in FIX2 explains it; it is the same class as 43
     (a command issued for an asset no closure walks) with an id that cannot name
     anything at all.
+
+## Wave FIX3 — the editor lights the world the player gets (2026-09-05)
+
+The FIX2 audit ended with a photograph and a verdict. The photograph: the
+showcase island's hero at **232/255 in the editor viewport, 1.8 in Play and
+1.7–2.0 in a shipped `--pack` boot**, with a building's shaded wall at **8.5**
+and 28.9 % of the shipped frame below luminance 8. The verdict: *"PIE ==
+shipping to within 0.2 of 255. The editor is the outlier."*
+
+The verdict is wrong, and the photograph is right. This wave measured the thing
+the photograph is of.
+
+### Clause 1 — the measurement, and it is not about hosts
+
+**`crates/inf-render/tests/sky_ambient.rs`** is the instrument: a white Lambert
+wall standing in the open under the P17 atmosphere at noon, photographed twice
+from the same distance — once from the sun's side and once from the other. Both
+faces see the same half-sky; only one sees the sun. Every reading is inverted
+back to **scene radiance** through the shipped post chain's own measured
+radiance→code curve (a full-screen emitter at sixteen known radiances; bloom,
+TAA, flare and grain off so the chain is a per-pixel function and one curve
+serves every frame), because ACES is not linear and a ratio of 8-bit codes is a
+ratio of nothing.
+
+The physical expectation is textbook: **≈ 100 klux** direct normal against **≈
+10–20 klux** diffuse horizontal on a clear day, so a vertical surface facing away
+from the sun reads **0.1–0.2** of the sunlit one, and up to about 0.35 once the
+ground it stands on bounces back.
+
+At `e8451338`:
+
+    configuration                   sunlit    shaded    ratio
+    atmosphere, GI off, near 18 m   0.7313    0.0706   0.0965
+    atmosphere, GI on,  near 18 m   1.3996    0.0180   0.0129   <- the Play frame
+    atmosphere, GI on,  far  60 m   0.8760    0.2325   0.2654
+    no atmosphere, GI on,  near     1.3608    0.0066   0.0048
+
+Read those four rows and the FIX2 verdict dissolves.
+
+* **With GI OFF the engine was accidentally about right** (0.0965). The
+  hard-coded hemispheric constant in the six lit shaders — `mix(vec3(0.03, 0.03,
+  0.035), vec3(0.10, 0.13, 0.18), up)` — happens to be roughly the magnitude a
+  sun of intensity 3 deserves.
+* **With GI ON it was 7× to 20× too dark**, because `amb = gi_irradiance(...)`
+  REPLACED that constant with the probe field, and the probe field is a **40 m
+  box centred on the camera**. Beyond it the fetch clamps to a boundary probe;
+  inside it a surface is dragged toward any of its eight probes that happens to
+  sit inside geometry; and a probe standing next to a big shaded wall gathers
+  that wall, which the march lit with the sun and with nothing else.
+* **And the error is a strong function of where the camera is standing**: 0.0129
+  at 18 m from a wall, 0.2654 at 60 m. A factor of **twenty**, in one renderer,
+  with one set of settings, from moving the camera.
+
+That twenty is what "the editor is the outlier" was made of. The audit's editor
+frame is an elevated camera at a crossing with the nearest buildings tens of
+metres away; its Play frame is a third-person camera behind a hero walking a few
+metres from a wall. Same renderer, same settings, same probe volume, two
+distances — and an ambient term that answers them twenty times apart.
+
+This wave does not re-derive the audit's particular 232-vs-1.8 crop, and does not
+need to: what it reproduces is the audit's own **frame-level** number — 28.9 % of
+a shipped frame below luminance 8 against 0.13 % of an editor frame — and the
+settings census below closes the only other explanation, that the two hosts are
+configured differently. They are not.
+
+**Neither host was right. The ambient term was wrong in all three.**
+
+### Clause 2 — one lighting path, and it was already one
+
+Measured rather than argued, and the census is
+`runtime/inf-player/tests/lit_stack.rs`:
+
+* `apply_record` is one mapping in two files, pinned character-for-character by
+  `apply_record_mirror.rs` since VIS1a.
+* The GI probe volume is `eye − extent/2`, a 40 m box on `frame.view.eye_local()`
+  (`passes/gi.rs:849-853`), in every host. Neither host sets `extent`, `rays`,
+  `quality`, `probe_budget` or `instance_budget` at all — and `probe_budget: 0`
+  means a full probe update every frame in both, so there is no convergence
+  transient in either.
+* `project_sky` and `project_light` are byte-identical between `host.rs` and
+  `render.rs`.
+* The two request chains differ in exactly two documented places and neither can
+  change an answer on a desktop: `detect_tier`'s second argument (it reads only
+  `tier_override`, which `apply_record`'s `..d` always leaves `None`) and
+  `clamp_mobile` (`cfg`-gated to wasm32/android).
+
+`the_editor_viewport_and_the_shipped_player_light_a_level_identically` builds
+BOTH chains from all **24** committed levels' records on this machine's real
+adapter and compares the resulting `RenderSettings` with `PartialEq` — field for
+field, and the detected tier with it, so the `detect_tier` argument is closed by
+measurement. It reports: *24 committed levels, editor viewport == shipped
+player, field for field, on tier High.* Anti-vacuity: the island's settings must
+arrive with GI and shadows ON, or the arm would be comparing two defaults.
+
+No crate depends on both hosts (Ring 1 and Ring 2, neither way), so the arm
+transcribes the editor's four-statement chain and
+`the_transcribed_editor_chain_is_the_editor_viewports_own` pins the
+transcription against `host.rs` read as text.
+
+**One real divergence was found by that census and is fixed here.** The editor's
+`PcgVolume` branch — the VEN1a venue rig, real coloured cone lights hung over a
+grammar-built stage — sat outside every visibility guard, while the player's
+whole projection loop is behind `if !visible { continue; }`. Hiding a venue
+volume turned its lamps off in PIE and in a shipped build and left them burning
+in the viewport: two different worlds on one machine, on the half of the frame
+whose MIRROR comment claims the two are identical. One `.filter(|_| visible)`
+(`host.rs`), and `every_light_the_editor_pushes_is_behind_a_visibility_check`
+fails without it.
+
+### Clause 3 — the ambient term is physics
+
+The engine has had a physically-based sky since P17.2 and no way to ask it the
+one question a shaded surface needs answered. `atmos_sample_skyview` answers for
+ONE direction, on the GPU, in a texture; an ambient term is an integral over the
+whole sphere, and there was **no such integral anywhere** — not on the CPU
+(`atmosphere.rs` had transmittance and no radiance at all), not in a LUT (there
+is no multiscatter or irradiance table), not in the shaders.
+
+So the missing half of the model is added, as the CPU mirror of `cs_skyview`'s
+own march (`crates/inf-render/src/atmosphere.rs`):
+
+* `sky_radiance(params, r_km, dir, sun, sun_irradiance, steps, t_steps)` —
+  Hillaire's energy-conserving step integral, the isotropic multiple-scattering
+  stand-in driven by the least-attenuated channel, and the Lambertian
+  ground-bounce term below the horizon, in the same order and with the same
+  arithmetic as the bake. One deliberate difference: the sun transmittance is
+  ray-marched here where the bake reads its own LUT, which makes the CPU copy
+  slightly *more* accurate than the texture it mirrors.
+* `gradient_radiance(horizon, zenith, dir)` — the authored two-colour sky, the
+  mirror of `gi_sky_radiance`'s fallback branch, so "how bright is the sky that
+  way" has one answer in this engine and not two.
+* `sky_irradiance_sh(...)` — the L1 projection of whichever of those the scene
+  has, over 48 golden-spiral directions in the same `4π/N` Monte-Carlo
+  normalisation the probe march uses, so the consumer convolves it with the
+  identical folded cosine lobe (`A₀/π = 1`, `A₁/π = 2/3`) and gets exit radiance
+  for an albedo-1 Lambert surface.
+
+Pure and GPU-free, which is that module's standing doctrine and is what lets the
+physics be asserted on a CI leg with no adapter. Six arms, all measurements:
+the white furnace closes to 1 % for every normal; the gradient source has the
+authored shape; a clear noon sky is blue (blue/red > 1.3) and irradiates an
+up-facing white surface with 6–60 % of the sun's own exit radiance; midnight is
+under 2 % of noon; the shipped 48-direction / 12-step / 8-step projection is
+within **2.3 %** of a 512-direction reference at the bake's own 32/40 steps; and
+it costs **0.0954 ms**.
+
+**How it reaches the shaders, and why it composes exactly.** Four L1 coefficient
+lanes appended to `GiDataGpu` (`sky_sh`), which every lit pass already binds
+through `EnvBinding` — so an ambient term that reaches every lit shader costs
+**zero new bindings**, and there was no room for a fifth fragment storage buffer
+in that group anyway (`passes::visbuffer` asserts the four it already spends
+against `Limits::default()`'s eight). It rides the GI uniform rather than the
+atmosphere one because `env_lighting.wgsl` is composed BEFORE the atmosphere
+library and WGSL has no forward declarations: `sky_irradiance` has to sit beside
+`gi_irradiance`, the term it is added to and whose cosine lobe it shares, and
+`atmos` is not reachable there.
+
+The two terms would double-count the sky if both carried it, so the probe march
+becomes a **difference from the open sky**: its miss term is zero and each hit
+subtracts the sky it blocks.
+
+    ambient = sky_irradiance(n) + Σ_hit (bounce − blocked sky)
+            = Σ_miss sky + Σ_hit bounce
+
+— the same integral the pre-FIX3 gather computed, to the quadrature, so
+occlusion is intact and a room stays a room, with the sky now delivered by a term
+that exists at every distance from the camera. It is why `gi_indirect` is no
+longer clamped at zero: a probe in a closed room legitimately gathers `−sky` in
+nearly every direction, and clamping there would throw away exactly the
+occlusion. The clamp moved to the sum, in `ambient_irradiance` — the one door all
+six lit shaders now spell their ambient as.
+
+And a hit surface is lit **by the sky as well as the sun, and at last with a
+cosine**. Before this a voxel's bounce was `albedo × sun × visibility / π`, so
+every wall facing away from the sun bounced exactly zero — and on a street, where
+most of a probe's rays end on a wall, that is most of the gather. The voxel
+carries no normal, so the ray's own direction is the proxy (`n = −dir`: a ray can
+only strike a face pointing back at it), exact head-on and an over-estimate at
+grazing incidence. That is EDIT1's carried *"GI bounce has no n·l"*, closed with
+the same proxy that pays for the sky, and it is worth its own number: the sunlit
+face's GI-on reading falls from **1.3996 to 0.8310**, because the old gather was
+handing every voxel full normal-incidence sun.
+
+`gi_specular` gains the sky term for the same reason the diffuse does — the probe
+field stopped carrying it, so a wet road would have reflected the buildings and
+not the sky above them.
+
+**Auto exposure is not what crushed the darks, and the brief asked.**
+`ExposureMode::Auto`'s `min_luminance` amplifier is unreachable on the island:
+the level authors `exposure_mode: 0` (`RenderSettingsRecord::default`, which
+`lit_showcase` does not override) and `exposure: 1.0`. Every reading in this
+wave is at manual exposure 1.0.
+
+AFTER, same instrument, same machine:
+
+    configuration                     sunlit    shaded    ratio
+    atmosphere, GI off, near 18 m     0.7313    0.0706   0.0965   (unchanged)
+    atmosphere, GI on,  near 18 m     0.8310    0.1527   0.1838
+    atmosphere, GI on,  far  60 m     0.8079    0.2316   0.2867
+    daylight gradient, GI off, near   0.7122    0.0708   0.0994
+    daylight gradient, GI on,  near   0.8236    0.1522   0.1848
+    engine-default dark gradient      0.7082    0.0408   0.0576   (control)
+
+The fourth and fifth rows are the cross-check that matters: an **authored
+gradient** carrying the same total energy as the physical medium lands within
+**0.5 %** of it, so the two sources really are one function. The far row is still
+high — that wall is outside the probe volume, so it gets the unoccluded sky — but
+the failure mode has gone from *black* to *as bright as an open sky*, which is a
+bound. And the control row is scored separately because it is a different claim:
+the same wall under the engine's own `SkyParams::default()` — which its doc calls
+an "editor-dark sky tuned to the infinity-dark theme" — must come out darker,
+because the term this wave added is a function of the **scene's** sky rather than
+of a constant.
+
+### Clause 4 — six goldens, the price, and what did not move
+
+`INF_GOLDEN_STRICT=1` over all 62 at `e8451338` and at head. **Exactly six frames
+moved and all six are GI-on scenes**, which is the gate: the sky term is reached
+only through `GiSettings::enabled`, so the other 56 run the instruction stream
+they always did. Thirteen of those 56 carry a small pre-existing diff against
+their committed PNG on this adapter (water_river 0.0056, terrain_splat 0.0037,
+water_lake_dusk 0.0020 and ten smaller); every one of those numbers is
+**bit-identical before and after**, which is what says they are the adapter and
+not the change.
+
+    golden           before mean/max    after mean/max   verdict
+    gi_bleed         0.0444 / 0.2295    0.1558 / 0.4919  FAILED, re-blessed
+    gi_terrain       0.0290 / 0.0739    0.0715 / 0.2930  FAILED, re-blessed
+    gi_specular      0.0000 / 0.0000    0.0536 / 0.2940  inside, re-blessed
+    gi_emissive      0.0000 / 0.0000    0.0495 / 0.3170  inside, re-blessed
+    venue_interior   0.0000 / 0.0000    0.0426 / 0.3347  inside, re-blessed
+    gi_scatter_neon  0.0000 / 0.0000    0.0261 / 0.2783  inside, re-blessed
+
+`spot_lights` and `csm` — which the brief listed as possibly moving — did **not**:
+they render with GI off, so they cannot. The four "inside tolerance" rows are
+re-blessed rather than left alone because the harness's own comment says a real
+change that sits inside the perceptual tolerance leaves the committed frame
+"quietly depicting an engine that no longer exists"; their baseline diff was
+0.0000, so blessing them bakes in no adapter drift at all.
+
+What each frame now shows, in its own arm's numbers (before → after):
+
+* **gi_bleed** near-wall red/green **1.196 → 1.462**, far 1.019 → 1.128. MORE
+  colour bleed, not less: the red wall is lit by the sky now, so it has light to
+  bleed. The old frame's wall was a washed-out pink because its ambient was the
+  whole gather; it is a saturated red standing in daylight.
+* **gi_emissive** floor green/red, GI on **1.848 → 1.996** (off 1.187, unmoved).
+* **gi_scatter_neon** floor red/green **1.518 → 1.742**, floor mean 180.3 → 170.7
+  — a more saturated neon pool on a less washed floor.
+* **gi_specular** grazing floor **210.9 → 194.5** against a flat control that fell
+  **144.0 → 59.3**, so the split-sum term's advantage over the constant it
+  replaced is 135 levels instead of 67; directionality 1.367 → 1.544.
+* **venue_interior** stage **45.34 → 45.50** (the rig unmoved, as it must be) and
+  the DARK CORNER **4.23 → 1.97**. *The interior got darker, not brighter* —
+  which is the no-double-count ruling paying off: the probe field's `−sky` term
+  takes back exactly the sky a room blocks, so a sky-irradiance term that exists
+  everywhere does not flood an enclosed space.
+* **gi_terrain** wall red/green with terrain **1.226 → 1.016**, without 0.969 →
+  0.989, so the red lift falls from +0.257 to +0.027.
+
+That last one broke a structural assertion (`> +0.10`) and is the only arm in the
+suite this wave had to re-aim. The cause is measured, not guessed: putting
+`ndl = 1.0` back into `gi_probes.wgsl` and changing nothing else returns the lift
+to **+0.331**. The old number was the missing cosine handing every voxel full
+normal-incidence sun. So the assertion moves to the two channels, where the
+effect is two large independent numbers instead of one small ratio: adding the
+ground drops the wall's red by **5.07** and its green by **9.85** of 255 — it gets
+darker (a wall standing on something receives less sky than one floating in an
+open sphere of it) and it gets darker twice as fast in green (the red albedo
+coming back). A terrain voxelized with no albedo fails the second assert; one
+that never reached the voxelizer fails the first.
+
+**The white furnace is unmoved and still closes**: gather factor **1.0096**
+against 1.0110 before, on a tolerance of 0.10 — and it now closes through a
+different mechanism, because the probe field contributes ~0 in a furnace and the
+sky term carries it. That is the furnace working as designed rather than by
+coincidence.
+
+**`gi_normalisation.rs`'s in-arm falsification is retired, with its measurement.**
+EDIT1 required the `gi_intensity = π` row to TRIP the wash-out ceilings. It no
+longer can, and the reason is the shape of the fix: the ambient's SCALE is set by
+`sky_irradiance`, which `gi_intensity` does not touch, and what `gi_intensity`
+multiplies is a signed difference, so π darkens the occluded half as fast as it
+brightens the bounce — **+13.1** where it was +49.4, clipping nothing. Mutating
+`gi_probes.wgsl` back to the pre-FIX3 gather (cosine gone, sky counted twice)
+trips both ceilings again at **+50.7 / +0.1393**, so the ceilings still see the
+defect; reaching it now needs a shader edit, and those two lines are source-gated
+(`sky_sh_tests::the_probe_miss_term_is_zero`). The non-vacuity half of the old
+control stays. *(This is the P23 law again: adding a check can retire gates
+downstream.)*
+
+**THE PRICE.** The fps instrument's LIT rows, re-measured at head on this
+machine (`inf-player --test fps_instrument --release`): 1080p with the lighting
+stack on, tier High — **p50 25.141 ms (39.8 fps), p95 27.916 ms, p99 29.018 ms,
+GPU frame 12.059 ms**, and THE STACK'S PRICE +8.009 ms of p95 and +2.949 ms of
+GPU against the unlit shipped default. The `gi` pass is 1.124 ms of GPU and
+2.029 ms to record. All five arms green, including the two that assert the lit
+p95/p99 against the same ceilings as the shipped configuration.
+
+The **term's own cost is zero on the GPU** — no new pass, no new dispatch, no new
+binding, and four dot products in a fragment that was already convolving an SH —
+and **0.0954 ms of CPU per projection**, memoized on the exact bits of everything
+the integral reads so it is paid at most once per frame and not at all when the
+sun has not moved. That figure is measured in isolation
+(`atmosphere::tests::sky_sh_is_cheap`) rather than read off the frame, because
+the round-to-round spread of the instrument's own 1080p p95 on this machine is
+**0.755 ms** (19.907 / 20.312 / 20.662) and a 0.095 ms term cannot be resolved
+inside it.
+
+### Clause 5 — the demo loop, and the frame the user judges
+
+`pwsh -NoProfile -File tools/demo/demo.ps1`, everything rebuilt from it, on the
+finished tree, in **both** play modes so that all three host surfaces are
+photographed: the editor viewport, embedded PIE, and the shipped player in its
+own window.
+
+    embedded  HERO MOVED 45.364 m, exit 0, "still running: none"
+    window    HERO MOVED 112.274 m, exit 0, "still running: none"
+
+Scored with the FIX2 audit's own measure — **the fraction of the frame below
+luminance 8**, which is camera-independent in a way a fixed box is not — over the
+editor shell's viewport rectangle (the window-mode player owns its whole frame):
+
+    host                              p25      frac<8
+    editor viewport      BEFORE     31.93      0.0010
+    editor viewport      AFTER      35.86      0.0001
+    embedded PIE  02-a   BEFORE      9.86      0.2054
+    embedded PIE  02-a   AFTER      25.54      0.0006
+    embedded PIE  03-b   BEFORE     60.98      0.0556
+    embedded PIE  03-b   AFTER      71.26      0.0002
+    player window 02-a   AFTER      30.66      0.0011
+    player window 03-b   AFTER      30.66      0.0002
+
+**The three hosts now agree about the dark end of the frame to within a tenth of
+a percent, where the editor and the runtime disagreed by a factor of two
+hundred** (0.0010 against 0.2054). And the editor barely moved — 31.93 → 35.86,
+four levels at the 25th percentile — because its elevated camera was already
+reading probes that could see the sky. That asymmetry is the wave's whole finding
+written as a picture: **the runtime came up to meet the editor, and the editor
+stayed where it was.**
+
+The hero himself, in the box he occupies in a third-person frame (and the
+shaded building wall that fills the left third of `02-pie-a`, the frame the FIX2
+audit's 8.5 came from), on the run at the same camera positions:
+
+    hero body box        p25 4.21 -> 91.00     frac<8 0.3079 -> 0.0000
+    shaded wall          p50 9.93 -> 29.59     frac<8 0.3947 -> 0.0000
+    player window hero   p25 94.25             frac<8 0.0000
+
+**A third of the hero was below luminance 8 and none of him is.** In the shipped
+player's own window he reads 94.25 at the 25th percentile — the same figure as
+embedded PIE's 92.25, which is `PIE == shipping` measured on the half of the
+frame no `state_bytes` fold can see.
+
+The wall's 29.6 against a sunlit ~180 in the same frame is about **6 %** in
+inverted radiance rather than the fixture's 18 %, and that is not a discrepancy:
+the fixture compares one wall's two faces at one albedo under an open sky, and
+the island's wall is a darker material standing in a street canyon that really
+does block most of its sky. The fixture is the physics; the frame is the look.
+
+    …/scratchpad/FIX3-FINAL/01-editor.png   02-pie-a.png   03-pie-b.png
+    …/scratchpad/FIX3-WINDOW/02-pie-a.png   03-pie-b.png   (the shipped player, own window)
+    …/scratchpad/FIX2-DEMO/*.png                           (the same street at e8451338)
+
+### Carried
+
+50. **The sky-irradiance term is gated on `GiSettings::enabled`.** A level that
+    authors no GI still takes the hard-coded hemispheric constant, which does not
+    know what time it is. The gate is what keeps 56 goldens byte-identical and it
+    is why this wave moved no scene schema; the honest end state is a
+    `SkyLightSettings` of its own, which is a `RenderSettingsRecord` field and so
+    a positional record append.
+51. **The shader's hemispheric fallback and the engine's own default sky are two
+    different guesses at one sky, and they disagree by about 1.7×.** Measured: a
+    shaded wall reads **0.0965** of a sunlit one under the constant and **0.0576**
+    under `SkyParams::default()` projected. So on a scene that leaves the sky at
+    the default, switching GI **on** now makes the world slightly DARKER — the
+    daylight-street arm reads p95 193.1 off against 188.2 on, a lift of **−4.9**.
+    Neither number is wrong for its own model. Making them agree moves either
+    every GI-off golden (change the constant) or every sky golden (change the
+    default), and this wave was allowed neither.
+52. **Outside the probe volume the ambient is the UNOCCLUDED sky.** Measured: the
+    same wall reads **0.1838** at 18 m (inside the 40 m box) and **0.2867** at
+    60 m (outside it), where the two ought to agree to a few percent. The failure
+    mode is bounded now — "as bright as an open sky" instead of "black" — but a
+    building 60 m from the camera receives no occlusion from its neighbours. A
+    volume fade or a second, coarser probe cascade is the fix.
+53. **A probe inside geometry still drags the surfaces around it.**
+    `gi_fetch_sh` interpolates its eight probes with no visibility weight, so a
+    wall whose nearest probe sits inside it reads that probe's gather. It is most
+    of why 52's two readings differ. DDGI's front-face/Chebyshev weighting is the
+    standard answer and costs eight dot products; it was scoped and not taken,
+    because it moves every GI golden a second time in one wave.
+54. **The bounce's normal is the ray's direction, not the surface's.** `n = −dir`
+    is exact for a face met head-on and an over-estimate at grazing incidence; on
+    a large flat floor the true normal is constant and the proxy is not. Measured
+    on `gi_terrain`: the red lift is +0.027 with the proxy and +0.331 with no
+    cosine at all, and the truth is between them. Reading the voxel occupancy
+    gradient would give a real normal for six extra samples on the hit.
+55. **The voxel pass still has no ambient at all.** `voxel.wgsl` binds no env
+    group — no `gi`, no AO — so a volumetric-terrain surface takes the hard-coded
+    hemispheric constant with no sky, no GI and no occlusion. Its own comment has
+    said so since P21.2 and this wave did not reach it.
+56. **The sky's own quadrature and the probe march's are different sizes.** The
+    `−sky` correction cancels the `+sky` term exactly only if both integrate the
+    sphere the same way; the CPU projects over 48 fixed directions and the march
+    uses `GiSettings::rays` (48 by default, **64** in the GI goldens). Both
+    converge to the same integral, so the residue is each quadrature's own error
+    on a smooth function — the same class as the L1 truncation itself — but it is
+    not zero and it is not measured.
+57. **The sky irradiance is one vector for the whole frame, at the camera's
+    radius.** `sky_irradiance_sh` takes `camera_radius_km(params, eye.y)`, so a
+    scene spanning a kilometre of altitude gets one sky for all of it. Under a
+    percent for a city; wrong for an orbital view.
+58. **Clouds, the moon and `tint_strength` are invisible to the ambient.** An
+    overcast sky irradiates a surface with the clear-sky answer; a moonlit night
+    has no ambient at all; and a level that pulls its physical sky toward the
+    authored gradient (`tint_strength > 0`) moves what is drawn and not what is
+    received. All three are **inert on every committed level** — `tint_strength`
+    defaults to 0.0 in both `AtmosphereParams` and the `SkyAtmosphere` component,
+    and the island authors neither clouds nor a night — which is why they are
+    carried rather than fixed.
+59. **The probe march's sun and the sky's sun are two different lights.** The
+    gather takes the first analytic directional light, because that is what
+    actually lights the voxels a ray hits; `sky_sh` is projected for `scene.sun`,
+    because that is what lights the sky the player can see. They coincide in every
+    committed level (`project_sky` pushes the sun as `lights[0]` in both hosts),
+    and a level that authored a directional light pointing elsewhere would have a
+    bounce and an ambient that disagree about where the sun is.
+60. **Carried 46 is closed and carried 47, 48 and 49 are not.** The FIX2 audit's
+    46 — *"every shaded surface in the RUNTIME is near-black, and in the editor
+    viewport it is not"* — is answered above, in three hosts and in a number. The
+    `--pack` registry arm (47), the unmeasured wire cost of a scatter kind's mesh
+    (48) and the NIL-guid audio command a shipped island boot issues (49) are
+    untouched by this wave and stand as written.
