@@ -34414,7 +34414,9 @@ measures them.
     sealed-room cancellation residue is 0.08 % of an open room's reading at the
     shipped `rays = 48` and 0.21 % at the `rays = 64` the GI goldens author.
     Carried 56 stands, quantified.
-66. **The transcription in `lit_stack.rs` is unguarded** (above). A byte pin
-    between `editor_settings`' body and the four statements it transcribes would
-    close it, on the `apply_record_mirror` pattern the file already uses in the
-    other direction.
+66. **The transcription in `lit_stack.rs` was unguarded** (above) — **CLOSED in
+    this audit**: `the_transcribed_editor_chain_is_the_editor_viewports_own` now
+    reads `editor_settings`' own body out of this file's source, bounded by the
+    next `fn`, and pins the five statements it transcribes. Mutation-verified in
+    the new form: dropping `clamp_occlusion` from the transcription alone now
+    fails, where before it left the whole binary green.
