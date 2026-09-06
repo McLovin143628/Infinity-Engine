@@ -717,7 +717,6 @@ impl EditorRenderAssets {
         loaded
     }
 
-
     /// **The drawn sections of one skeletal mesh**, cached — `(first index, index
     /// count, material guid)` per material slot, EMPTY when the mesh wants one
     /// slot, which is every committed character in this tree.
@@ -758,7 +757,11 @@ impl EditorRenderAssets {
         mesh.skinned_sections()
             .into_iter()
             .map(|(first, count, slot)| {
-                (first, count, mesh.material_for_slot(slot).map(|a| a.uuid().as_u128()))
+                (
+                    first,
+                    count,
+                    mesh.material_for_slot(slot).map(|a| a.uuid().as_u128()),
+                )
             })
             .collect()
     }
@@ -851,17 +854,17 @@ impl EditorRenderAssets {
                     .and_then(|s| s.mesh),
             );
         }
-            // **AND THE SKINNED MESH'S MATERIAL SLOTS** (wave CHAR1a.3). A
-            // slot is named by the `.inf_mesh`, not by any component, so a body
-            // whose face wants twelve materials binds exactly ONE of them here
-            // and eleven surfaces registered nothing, resolved nothing, and drew
-            // off their scalar colour. It is the same hole TER2a found for a
-            // terrain's four splat layers, one asset kind over.
-            //
-            // Empty for every mesh written before the slot table existed, so
-            // this adds nothing to any level in this repository and the
-            // registration SEQUENCE -- which `VtTextures::want_floor` is a pure
-            // function of -- is unmoved for all of them.
+        // **AND THE SKINNED MESH'S MATERIAL SLOTS** (wave CHAR1a.3). A
+        // slot is named by the `.inf_mesh`, not by any component, so a body
+        // whose face wants twelve materials binds exactly ONE of them here
+        // and eleven surfaces registered nothing, resolved nothing, and drew
+        // off their scalar colour. It is the same hole TER2a found for a
+        // terrain's four splat layers, one asset kind over.
+        //
+        // Empty for every mesh written before the slot table existed, so
+        // this adds nothing to any level in this repository and the
+        // registration SEQUENCE -- which `VtTextures::want_floor` is a pure
+        // function of -- is unmoved for all of them.
         for mesh in skinned {
             for (_, _, mat) in self.skinned_sections(mesh).iter() {
                 bindings.extend(mat.map(|g| Uuid::from_u128(g)));

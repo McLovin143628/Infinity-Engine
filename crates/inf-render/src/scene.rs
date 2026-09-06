@@ -1693,9 +1693,7 @@ pub fn skinned_sections(
                 vt: instance.vt,
             };
             if let Some(guid) = *material {
-                if let Some((color, metallic, roughness, emissive, blend, cutoff)) =
-                    surface(guid)
-                {
+                if let Some((color, metallic, roughness, emissive, blend, cutoff)) = surface(guid) {
                     out.color = color;
                     out.metallic = metallic;
                     out.roughness = roughness;

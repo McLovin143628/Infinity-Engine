@@ -147,12 +147,7 @@ fn a_crowd_agents_hand_leaves_the_bind_pose() {
                 .and_then(|p| joint_at(&skeleton, &p.pose, "hand_l"))
                 .map(|h| (h - bind_hand).length())
                 .unwrap_or(0.0);
-            rows.push((
-                *guid,
-                format!("{:?}", agent.tier),
-                d,
-                posed.is_some(),
-            ));
+            rows.push((*guid, format!("{:?}", agent.tier), d, posed.is_some()));
         }
     }
     for (guid, tier, d, published) in &rows {

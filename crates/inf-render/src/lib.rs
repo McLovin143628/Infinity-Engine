@@ -145,14 +145,13 @@ pub use renderer::{
 };
 pub use scene::{
     apply_seam, box_uv, deformed_skinned_mesh, identity_palette, skinned_sections,
-    RenderFractureChunk,
-    RenderFractureVertex, RenderTilemap, RenderVoxelChunk, RenderVoxelVertex, RenderVoxelVolume,
-    ScatterBatch, ScatterClock, ScatterData, ScatterGeometry, ScatterInstance, ScatterInstanceRaw,
-    ScatterMemo, ScatterMeshes, ScatterSource, SkinnedInstance, SkinnedMeshData, SkinnedSection, SkinnedShadow,
-    SkinnedVertex, SkyParams, SpriteInstance, SpriteTextureUpload, SunParams, TerrainTileKey,
-    TextureHandle, TilemapParams, VgeomAsset, VgeomInstance, VgeomMesh, VoxelChunkKey, CLOTH_TINT,
-    DEFAULT_SUN_DIR, HAIR_TINT, ID_GIZMO_BASE, ID_NONE, INTERIOR_LOD_M, MAX_SCATTER_MESH_TRIANGLES,
-    STRUCTURE_LOD_M,
+    RenderFractureChunk, RenderFractureVertex, RenderTilemap, RenderVoxelChunk, RenderVoxelVertex,
+    RenderVoxelVolume, ScatterBatch, ScatterClock, ScatterData, ScatterGeometry, ScatterInstance,
+    ScatterInstanceRaw, ScatterMemo, ScatterMeshes, ScatterSource, SkinnedInstance,
+    SkinnedMeshData, SkinnedSection, SkinnedShadow, SkinnedVertex, SkyParams, SpriteInstance,
+    SpriteTextureUpload, SunParams, TerrainTileKey, TextureHandle, TilemapParams, VgeomAsset,
+    VgeomInstance, VgeomMesh, VoxelChunkKey, CLOTH_TINT, DEFAULT_SUN_DIR, HAIR_TINT, ID_GIZMO_BASE,
+    ID_NONE, INTERIOR_LOD_M, MAX_SCATTER_MESH_TRIANGLES, STRUCTURE_LOD_M,
 };
 pub use scene::{
     detail_scale_q8, glow_emissive, night_glow_step, pulse_emissive, pulse_tick,

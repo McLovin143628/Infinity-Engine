@@ -269,7 +269,10 @@ impl MeshAsset {
     /// growing the list past the slots: a table longer than the slots is a table
     /// a reader can index past the mesh's own submeshes, which is how a face
     /// ends up wearing a body's skin.
-    pub fn bind_material_slots(&mut self, pairs: impl IntoIterator<Item = (u32, inf_asset::AssetId)>) {
+    pub fn bind_material_slots(
+        &mut self,
+        pairs: impl IntoIterator<Item = (u32, inf_asset::AssetId)>,
+    ) {
         if self.material_slots.is_empty() {
             return;
         }
@@ -284,7 +287,10 @@ impl MeshAsset {
 
     /// The material bound to one slot, or `None`.
     pub fn material_for_slot(&self, slot: u32) -> Option<inf_asset::AssetId> {
-        self.material_slot_assets.get(slot as usize).copied().flatten()
+        self.material_slot_assets
+            .get(slot as usize)
+            .copied()
+            .flatten()
     }
 
     /// **The DRAWN sections of this mesh's skinned geometry**, as

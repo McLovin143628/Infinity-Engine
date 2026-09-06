@@ -370,9 +370,57 @@ PARAM_KIND = {
     "msrtex": "msr",
     "anisoaopaintmasktex": "aniso_ao_paint",
     "ccccrtex": "clearcoat",
+
+    # -- THE METAHUMAN MATERIALS, READ (wave CHAR1a.3) -----------------------
+    #
+    # Probed the same way `M_Mannequin` was, on the assembled characters, on
+    # 2026-09-06 (`probe_materials` in `metahuman.py`: every texture parameter of
+    # every material the Body/Face/FullBody meshes wear, with its compression
+    # settings and sRGB flag). The names are the MetaHuman pipeline's and none of
+    # them reaches the eight keys above:
+    #
+    # | parameter | texture | what it is |
+    # |---|---|---|
+    # | `Basecolor Baked` | `T_Body_BC` / `T_Head_LOD*_BC` | albedo, sRGB, TC_DEFAULT |
+    # | `Normal Baked` | `T_*_N` | tangent-space normal, TC_NORMALMAP |
+    # | `SRMF Baked` | `T_*_SRMF` | specular / roughness / metallic / fuzz, TC_MASKS |
+    # | `SRM Baked` | `T_Teeth_SRM` | the same three, no fourth |
+    # | `Scatter Baked` | `T_*_Scatter` | subsurface amount -- no slot here |
+    # | `Micro Skin Details Mask` | `T_Skin_Microtiling_M` | a 32-px tiling detail mask |
+    # | `Iris/Sclera Basecolor Baked` | `T_Eye*_BC` | albedo |
+    # | `Iris/Sclera Normal Baked` | `T_Eye*_N` | normal |
+    # | `Normal LOD Baked` | `T_BakedNormal_LOD*` | a coarser normal for a coarser rung |
+    # | `Basecolor/Normal Animated Delta cm*/wm*` | `T_Face_*_Animated_*` | facial-rig deltas |
+    #
+    # **The channel census that settles the packing** (every 17th texel of the
+    # exported PNGs, three maps agreeing): `T_Body_SRMF` R median **150** (the
+    # specular constant), G median **187** (the roughness -- skin is rough), B
+    # **exactly 0 at every percentile including the max** (the metallic -- skin is
+    # not a metal), A median 200 (the fourth term). `T_Head_LOD1_SRMF` reads R 153
+    # / G 176 / **B 0** / A 203 and `T_Teeth_SRM` R 34 / G 64 / **B 0**. So the
+    # name is the spec: S in R, R in G, M in B -- which is a SWIZZLE into this
+    # engine's occlusion/roughness/metallic ORM, exactly as `msr` is.
+    "basecolorbaked": "albedo",
+    "normalbaked": "normal",
+    "normallodbaked": "normal_second",
+    "srmfbaked": "srmf",
+    "srmbaked": "srmf",
+    "scatterbaked": "scatter",
+    "microskindetailsmask": "detail_mask",
+    "irisbasecolorbaked": "albedo",
+    "sclerabasecolorbaked": "albedo",
+    "irisnormalbaked": "normal",
+    "scleranormalbaked": "normal_second",
 }
 
 NAME_KIND = [
+    # Wave CHAR1a.3: the MetaHuman facial-animation deltas, by name because the
+    # parameter names carry a per-curve suffix (`cm1`..`cm3`, `wm1`..`wm3`) and a
+    # table of six would be a table of the same fact six times. This engine has no
+    # animated-delta slot, so they are REPORTED unplaced rather than raced into
+    # the normal or albedo slot by the substring loop -- which is what
+    # `Normal Animated Delta wm1` would otherwise do.
+    (r"(?i)_Animated_(CM|WM)[0-9]+$", "animated_delta"),
     (r"(?i)(_n$|_normal|normallod|_nrm)", "normal"),
     (r"(?i)(_orm$|_arm$|_packed)", "orm"),
     (r"(?i)(_r$|_rough)", "roughness"),

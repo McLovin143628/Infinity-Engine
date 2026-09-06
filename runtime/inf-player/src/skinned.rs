@@ -563,7 +563,6 @@ impl SkinnedRegistry {
         built
     }
 
-
     /// **The drawn sections of one skeletal mesh**, cached — `(first index, index
     /// count, material guid)` per material slot, EMPTY when the mesh wants one
     /// slot, which is every committed character in this tree.
@@ -604,7 +603,11 @@ impl SkinnedRegistry {
         mesh.skinned_sections()
             .into_iter()
             .map(|(first, count, slot)| {
-                (first, count, mesh.material_for_slot(slot).map(|a| a.uuid().as_u128()))
+                (
+                    first,
+                    count,
+                    mesh.material_for_slot(slot).map(|a| a.uuid().as_u128()),
+                )
             })
             .collect()
     }

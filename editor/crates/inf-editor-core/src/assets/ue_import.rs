@@ -173,6 +173,15 @@ pub struct UeImportReport {
     pub licences: Vec<(String, String, bool)>,
     /// Bytes of `.inf_tex` + `.inf_mat` + `.inf_mesh` written.
     pub bytes: u64,
+    /// **Which pack each written asset came from** (wave CHAR1a.3, carried 96),
+    /// so the licence position can be stamped onto the asset ON DISK rather than
+    /// only printed.
+    ///
+    /// Collected as the import goes because that is the only place the answer is
+    /// known: a `.inf_tex` is written inside `import_material` and has no key of
+    /// its own, and a run that imports two packs cannot recover which is which
+    /// from the finished report.
+    pub asset_packs: Vec<(AssetId, String)>,
 }
 
 /// A prop's light, in **this engine's units and frame**.
@@ -492,9 +501,17 @@ pub fn import_manifest(
             continue;
         }
         let stem = rebind_of(&mat.key);
+        let before = report.textures.len();
         let id = import_material(project, &base, &dest, mat, &by_key, opts, stem, &mut report)?;
         mat_ids.insert(mat.key.clone(), id);
         report.materials.push((mat.key.clone(), id));
+        // The material and every texture IT wrote belong to its pack — the only
+        // place a `.inf_tex`'s provenance is known, since a texture record has no
+        // pack of its own.
+        report.asset_packs.push((id, mat.pack.clone()));
+        for t in report.textures[before..].to_vec() {
+            report.asset_packs.push((t, mat.pack.clone()));
+        }
         if let Some(stem) = stem {
             report.rebinds.push((stem.to_string(), id));
         }
@@ -544,6 +561,7 @@ pub fn import_manifest(
                 .map(|m| m.triangle_count())
                 .unwrap_or(0);
             record_rungs(project, id, mesh, &mut report);
+            report.asset_packs.push((id, mesh.pack.clone()));
             report
                 .meshes
                 .push((mesh.key.clone(), id, mesh.lods.len(), tris));
@@ -630,6 +648,16 @@ pub fn import_manifest(
                     .load_payload::<inf_mesh::MeshAsset>(id)
                     .map(|mesh| mesh.triangle_count())
                     .unwrap_or(0);
+                report.asset_packs.push((id, sk.pack.clone()));
+                // **THE SLOT TABLE** (wave CHAR1a.3, `.inf_mesh` v3). The
+                // manifest states this mesh's material slots as manifest KEYS and
+                // section 1 has already imported each of them, so this is the one
+                // place in the tree where "slot 3 is that asset" is known. Written
+                // into the payload rather than the sidecar because neither a
+                // cooked `.ipack` nor a PIE `ScenePayload` carries a sidecar, and
+                // a face whose eye slots resolved in the editor and not in the
+                // game is the divergence PIE == shipping exists to stop.
+                bind_slots(project, id, sk, &mat_ids, &mut report);
                 rungs.push((lod.level, id, tris));
             }
             let Some((_, lod0, tris0)) = rungs.first().copied() else {
@@ -749,14 +777,29 @@ pub fn import_manifest(
         let asset = inf_anim::AnimClipAsset::new(payload, Some(*target_id.uuid().as_bytes()));
         let name = format!("{}_{}", c.pack, c.name);
         let import = super::skeleton_binding::import_table(project, Some(target_id));
-        let id = project.write_asset(
-            &dest,
-            &name,
+        // **IDENTITY-IDEMPOTENT** (carried item 94). `write_asset` allocates a
+        // fresh GUID and side-steps a name collision by writing `X_1.inf_anim`;
+        // four import runs of one manifest therefore left 656 `.inf_anim` in the
+        // island project where 164 belong. The id is now a pure function of the
+        // manifest key and the path a pure function of the name, so a re-import
+        // overwrites its own output — the same rule the texture writer has
+        // followed since ASSET0, applied to the one kind that did not.
+        let id = project.write_asset_at_with_id(
+            &dest.join(format!("{name}.inf_anim")),
             &asset,
-            Some(c.source.clone()),
+            clip_guid(&c.key),
             vec![target_id],
             import,
         )?;
+        // The source note the allocating door used to write.
+        if let Some(entry) = project.db().get(id) {
+            let path = entry.path.clone();
+            if let Ok(mut side) = inf_asset::AssetSidecar::load(&path) {
+                side.source = Some(c.source.clone());
+                let _ = side.save(&path);
+            }
+        }
+        report.asset_packs.push((id, c.pack.clone()));
         if !rep.dropped.is_empty() {
             report
                 .advisories
@@ -824,8 +867,124 @@ pub fn import_manifest(
         ));
     }
 
+    // **THE LICENCE, ON DISK** (carried 96). Last, because it stamps everything
+    // the run produced and the run is now over.
+    let stamped = stamp_licences(project, &mut report);
+    if stamped > 0 {
+        report.advisories.push(format!(
+            "licence position written into {stamped} asset sidecar(s) on disk"
+        ));
+    } else if !report.licences.is_empty() {
+        report.advisories.push(
+            "NO asset sidecar carries a licence position — the packs' licences \
+             exist only in this report, which is carried item 96"
+                .to_string(),
+        );
+    }
     report.bytes = written_bytes(project, &report);
     Ok(report)
+}
+
+/// **A deterministic asset GUID for one manifest key** (wave CHAR1a.3, carried
+/// item 94).
+///
+/// # The defect
+///
+/// The clip importer wrote every `.inf_anim` through `write_asset`, which
+/// ALLOCATES a fresh GUID and, on a name collision, writes `X_1.inf_anim` beside
+/// the one already there. Measured at the CHAR1a audit: the island project held
+/// **656** `.inf_anim` from four import runs, 656 distinct GUIDs, and 134 of the
+/// 164 sources with two byte-different payloads on disk. The importer was
+/// content-deterministic and not **identity**-idempotent, and the difference is
+/// the difference between a re-import that updates a project and one that grows
+/// it.
+///
+/// # The rule
+///
+/// The GUID is a pure function of the manifest key — the UE object path — so a
+/// re-import of the same source overwrites its own output, exactly as the texture
+/// writer's deterministic PATH already does. FNV-1a over the key, spread across
+/// sixteen bytes, written out rather than pulled from a hasher crate for the same
+/// reason `short_name`'s digest is: this is an IDENTITY, and an identity whose
+/// bytes depend on a dependency's default hasher is an identity that can move
+/// under a `cargo update`.
+///
+/// The high nibble is forced to a UUID v4 shape so the value round-trips through
+/// every reader that pretty-prints one, and the salt keeps a clip's id away from
+/// any other derived id of the same key.
+pub fn clip_guid(key: &str) -> AssetId {
+    let mut bytes = [0u8; 16];
+    for (i, chunk) in bytes.chunks_mut(8).enumerate() {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        // The salt, so `clip_guid("X")` and any future `something_guid("X")`
+        // cannot collide on one key.
+        for b in b"inf_anim:ue-clip:".iter().chain(key.as_bytes()) {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        chunk.copy_from_slice(&h.to_le_bytes());
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    AssetId(uuid::Uuid::from_bytes(bytes))
+}
+
+/// The sidecar `import` keys the licence position is written to.
+///
+/// Named once, here, because a gate reads them back: **carried item 96** was
+/// that the MetaHuman licence row existed in the export manifest and in the
+/// printed import report and **nowhere on disk** — a grep for `licen` over all
+/// 272 imported sidecars returned nothing. A licence that travels only in a
+/// console line is a licence nobody can find six months later, which for content
+/// that MAY SHIP and MAY NOT BE COMMITTED is the one fact that has to be
+/// attached to the bytes.
+pub const LICENCE_KEY: &str = "licence";
+/// Whether the pack's licence permits SHIPPING this asset — see [`LICENCE_KEY`].
+pub const LICENCE_SHIP_KEY: &str = "licence_may_ship";
+/// Which pack the asset came from — see [`LICENCE_KEY`].
+pub const LICENCE_PACK_KEY: &str = "licence_pack";
+
+/// **Write the pack's licence position into every asset this run produced.**
+///
+/// Sidecar-only: no payload moves, no schema window, and the text is where a
+/// human looking at the asset will look. Returns how many sidecars were stamped,
+/// which is the number the report prints and the gate asserts non-zero.
+fn stamp_licences(project: &mut AssetProject, report: &mut UeImportReport) -> usize {
+    let by_pack: BTreeMap<&str, (&str, bool)> = report
+        .licences
+        .iter()
+        .map(|(p, l, s)| (p.as_str(), (l.as_str(), *s)))
+        .collect();
+    let mut stamped = 0usize;
+    let pairs = report.asset_packs.clone();
+    let mut failures: Vec<String> = Vec::new();
+    for (id, pack) in pairs {
+        let Some((licence, ship)) = by_pack.get(pack.as_str()).copied() else {
+            continue;
+        };
+        let Some(entry) = project.db().get(id) else {
+            continue;
+        };
+        let path = entry.path.clone();
+        let Ok(mut side) = inf_asset::AssetSidecar::load(&path) else {
+            continue;
+        };
+        let mut t = side.import.take().unwrap_or_default();
+        t.insert(LICENCE_KEY.into(), licence.to_string().into());
+        t.insert(LICENCE_SHIP_KEY.into(), ship.into());
+        t.insert(LICENCE_PACK_KEY.into(), pack.clone().into());
+        side.import = Some(t);
+        match side.save(&path) {
+            Ok(()) => stamped += 1,
+            Err(e) => failures.push(format!("{}: {e}", path.display())),
+        }
+    }
+    for f in failures {
+        report
+            .advisories
+            .push(format!("licence not recorded on disk for {f}"));
+    }
+    stamped
 }
 
 /// The rung census, into the mesh's sidecar `import` table.
@@ -868,6 +1027,93 @@ fn record_rungs(project: &mut AssetProject, id: AssetId, mesh: &Mesh, report: &m
             .advisories
             .push(format!("{}: rung census not recorded ({e})", mesh.key));
     }
+}
+
+/// **Bind a skeletal mesh's material slots into its payload** (`.inf_mesh` v3).
+///
+/// The manifest's `material_slots` are manifest KEYS in slot order and
+/// `mat_ids` maps each to the asset section 1 imported it as, so this is a
+/// straight zip — and it is the only place both halves are in scope.
+///
+/// A slot naming a material the run did not import is left `None` and REPORTED:
+/// the alternative is a face whose eyelash slot silently inherits the skin, which
+/// is the state this whole feature exists to leave behind.
+fn bind_slots(
+    project: &mut AssetProject,
+    mesh: AssetId,
+    sk: &SkeletalMesh,
+    mat_ids: &BTreeMap<String, AssetId>,
+    report: &mut UeImportReport,
+) {
+    if sk.material_slots.len() < 2 {
+        // One slot (or none) is what every body in this tree has, and an
+        // unsectioned mesh is what every reader already draws. Writing a
+        // one-entry table would cost a payload rewrite per rung for a decision
+        // nobody makes.
+        return;
+    }
+    let Ok(mut asset) = project.load_payload::<inf_mesh::MeshAsset>(mesh) else {
+        return;
+    };
+    let mut bound = 0usize;
+    let mut missing: Vec<String> = Vec::new();
+    let pairs: Vec<(u32, AssetId)> = sk
+        .material_slots
+        .iter()
+        .enumerate()
+        .filter_map(|(i, key)| {
+            let Some(key) = key else {
+                missing.push(format!("slot {i} names no material"));
+                return None;
+            };
+            match mat_ids.get(key) {
+                Some(id) => {
+                    bound += 1;
+                    Some((i as u32, *id))
+                }
+                None => {
+                    missing.push(format!("slot {i} ({key}) did not import"));
+                    None
+                }
+            }
+        })
+        .collect();
+    // The payload's own slot NAMES have to exist for the table to be indexable
+    // by the same index `SubMesh::material_slot` carries; a glTF import writes
+    // one per primitive material, so a mesh whose slots the manifest knows and
+    // whose payload has none is a mesh this table cannot address.
+    if asset.material_slots.len() < sk.material_slots.len() {
+        report.advisories.push(format!(
+            "{}: the manifest states {} material slots and the imported mesh has \
+             {} — the slot table is bound over the shorter list",
+            sk.key,
+            sk.material_slots.len(),
+            asset.material_slots.len()
+        ));
+    }
+    asset.bind_material_slots(pairs);
+    let Some(entry) = project.db().get(mesh) else {
+        return;
+    };
+    let path = entry.path.clone();
+    let deps = entry.sidecar.dependencies.clone();
+    let import = entry.sidecar.import.clone();
+    if let Err(e) = project.write_asset_at_with_id(&path, &asset, mesh, deps, import) {
+        report
+            .advisories
+            .push(format!("{}: slot table not written ({e})", sk.key));
+        return;
+    }
+    report.advisories.push(format!(
+        "{}: {bound} of {} material slots bound into the mesh{}",
+        sk.key,
+        sk.material_slots.len(),
+        if missing.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", missing.join(", "))
+        }
+    ));
 }
 
 /// The character LOD ladder, into the LOD-0 mesh's sidecar `import` table.
@@ -1122,7 +1368,17 @@ fn rebind_character_clips(
             .map(|e| e.sidecar.dependencies.clone())
             .unwrap_or_default();
         let path = project.root().join(format!("{stem}.inf_anim"));
-        project.write_asset_at_with_id(&path, &payload, want, deps, None)?;
+        // **AND THE SKELETON HASH MOVES WITH THE RIG** (carried item 95). The
+        // rebind writes a clip authored against the PACK's rig at the starter
+        // character's GUID, over a rig that has just been replaced by that same
+        // pack's — so the clip and the rig ARE authored together, and the sidecar
+        // said otherwise: the island's four rebound assets recorded `8d06c1ee…`
+        // while `Starter.inf_skel` hashed `5c7c1647…`, and the editor's content
+        // scan printed *"the character animates the wrong bones"* on every boot
+        // for content that was in fact correct. A false positive that will hide a
+        // true one — so the table is rebuilt here, against the rig on disk.
+        let import = super::skeleton_binding::import_table(project, ids.skeleton);
+        project.write_asset_at_with_id(&path, &payload, want, deps, import)?;
         report.rebinds.push((format!("{stem}.inf_anim"), want));
     }
     Ok(())
@@ -1478,7 +1734,14 @@ fn stem_kind(stem: &str) -> Option<inf_material::ground::GroundKind> {
 /// Returns an EMPTY slice for a role this engine has nowhere to put, which the
 /// caller reports as unplaced — `tangent`, `normal_second`, `decal` and
 /// `clearcoat` are all real maps with no home here, and saying so is the ASSET0
-/// audit's rule.
+/// audit's rule. Wave CHAR1a.3 adds four more of them from the MetaHuman
+/// materials: `scatter` (the subsurface amount — PAR5's, and this engine has no
+/// SSS term to feed), `detail_mask` (a 32-pixel micro-tiling mask; the engine's
+/// own detail slot is a whole texture with a tiling rate, not a mask), and
+/// `animated_delta` (the facial rig's per-curve basecolor/normal deltas, which
+/// need the 875-joint face rig FACE1 will build). Each is a real map this bridge
+/// carries across and this engine cannot yet spend, and the import log says so
+/// per material.
 pub fn role_to_planes(role: &str) -> &'static [(MapKind, Option<usize>)] {
     match role {
         "albedo" => &[(MapKind::Albedo, None)],
@@ -1488,6 +1751,22 @@ pub fn role_to_planes(role: &str) -> &'static [(MapKind, Option<usize>)] {
         "ao" => &[(MapKind::Occlusion, None)],
         "msr" => &[(MapKind::Metallic, Some(0)), (MapKind::Roughness, Some(2))],
         "aniso_ao_paint" => &[(MapKind::Occlusion, Some(1))],
+        // **The MetaHuman mask** (wave CHAR1a.3). `T_*_SRMF` is
+        // Specular / Roughness / Metallic / Fuzz and `T_Teeth_SRM` the same
+        // three without the fourth -- the name is the spec, and a channel census
+        // of three of them agrees: `T_Body_SRMF` R median 150 (the specular
+        // constant), G median **187** (the roughness), B **exactly 0 at every
+        // percentile including the max** (skin is not a metal), A median 200.
+        // So roughness is G and metallic is B, which is a different swizzle from
+        // `msr`'s and the reason both are in this table by name rather than one
+        // "packed mask" rule that would have to guess.
+        //
+        // The specular plane has nowhere to go: this engine's PBR is
+        // metallic-roughness and reads no specular map. It is dropped in silence
+        // here rather than reported, because unlike `tangent` or `clearcoat` it
+        // is a CHANNEL of a texture that IS imported -- the advisory would say
+        // "srmf is unplaced" about a map two thirds of which just landed.
+        "srmf" => &[(MapKind::Roughness, Some(1)), (MapKind::Metallic, Some(2))],
         _ => &[],
     }
 }
