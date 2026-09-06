@@ -1438,7 +1438,7 @@ fn stem_kind(stem: &str) -> Option<inf_material::ground::GroundKind> {
 /// caller reports as unplaced — `tangent`, `normal_second`, `decal` and
 /// `clearcoat` are all real maps with no home here, and saying so is the ASSET0
 /// audit's rule.
-fn role_to_planes(role: &str) -> &'static [(MapKind, Option<usize>)] {
+pub fn role_to_planes(role: &str) -> &'static [(MapKind, Option<usize>)] {
     match role {
         "albedo" => &[(MapKind::Albedo, None)],
         "normal" => &[(MapKind::Normal, None)],
@@ -1452,7 +1452,7 @@ fn role_to_planes(role: &str) -> &'static [(MapKind, Option<usize>)] {
 }
 
 /// One channel of an RGBA plane, broadcast into a fresh grey RGBA plane.
-fn broadcast_channel(rgba: &[u8], channel: usize) -> Vec<u8> {
+pub fn broadcast_channel(rgba: &[u8], channel: usize) -> Vec<u8> {
     let mut out = vec![255u8; rgba.len()];
     for (i, px) in rgba.chunks_exact(4).enumerate() {
         let v = px[channel];

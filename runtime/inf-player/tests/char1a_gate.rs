@@ -628,3 +628,462 @@ fn the_committed_starter_body_is_high_poly_and_skinned_to_the_committed_rig() {
          nothing else, which is not a skin"
     );
 }
+
+
+// ── WAVE CHAR1a.2 ────────────────────────────────────────────────────────────
+//
+// Five more, on the five things the second half changed. Same rule as above:
+// each names the mutation that turns it red, and each was run.
+
+/// **THE EDITOR PREVIEWS AN IDLE, NOT THE BIND POSE** (CHAR1a carried 72).
+///
+/// The defect was photographable and was photographed: outside Play there is no
+/// sim pose and an authored character carries no `AnimPlayer`, so every rig in
+/// the viewport fell to the rest pose and stood in its bind — a T on the
+/// generated rig, an A on the mannequin's.
+///
+/// This asks the SHIPPED store, because the rule is one rule in two files and
+/// `projector_mirror.rs` is what keeps them equal; measuring either one measures
+/// both. The clip's single key is 90° about X on joint 1, so "the preview is not
+/// the bind pose" is a palette that differs — and the rest palette is compared
+/// against too, so an arm that accidentally compared a pose to itself would fail.
+///
+/// **The mutation**: delete the `machine_entry_clip` arm from `resolve_skinned`
+/// (restore `(None, None) => Pose::rest`). The first assertion fails: the
+/// preview palette equals the rest palette. Verified.
+#[test]
+fn the_preview_pose_is_the_machines_entry_clip_and_not_the_bind_pose() {
+    use inf_ecs::components::{AnimStateMachine, SkeletalMesh};
+    use inf_player::skinned::SkinnedRegistry;
+
+    let mesh_id = uuid::Uuid::from_u128(0xCA1A_2001);
+    let skel_id = uuid::Uuid::from_u128(0xCA1A_2002);
+    let clip_id = uuid::Uuid::from_u128(0xCA1A_2003);
+    let sm_id = uuid::Uuid::from_u128(0xCA1A_2004);
+
+    let skeleton = two_joint_rig();
+    let mut reg = SkinnedRegistry::new();
+    reg.insert_mesh(mesh_id, one_triangle_skin());
+    reg.insert_skeleton(skel_id, skeleton.clone());
+    reg.insert_clip(
+        clip_id,
+        key_clip("Idle", 1, glam::Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+    );
+    reg.insert_state_machine(
+        sm_id,
+        inf_anim::StateMachine {
+            states: vec![inf_anim::SmState::clip("Idle", *clip_id.as_bytes())],
+            transitions: Vec::new(),
+            entry: 0,
+            params: Vec::new(),
+            profiles: Vec::new(),
+        },
+    );
+
+    let sm = SkeletalMesh {
+        mesh: Some(mesh_id),
+        skeleton: Some(skel_id),
+    };
+    let machine = AnimStateMachine {
+        sm: Some(sm_id),
+        ..AnimStateMachine::default()
+    };
+
+    let rest = reg
+        .resolve_skinned(&sm, None, None, None)
+        .expect("the rest pose resolves")
+        .palette;
+    let preview = reg
+        .resolve_skinned(&sm, None, None, Some(&machine))
+        .expect("the preview resolves")
+        .palette;
+    assert_ne!(
+        rest[1].to_cols_array(),
+        preview[1].to_cols_array(),
+        "the preview palette IS the bind pose — the editor is still drawing a \
+         rig at rest instead of its machine's idle"
+    );
+
+    // …and the shared (crowd) door agrees with it, which is the invariant a
+    // tier switch would otherwise break: an idle up close and a bind pose at
+    // 96 m is one character with two silhouettes.
+    let shared = reg
+        .resolve_skinned_shared(&sm, Some(&machine))
+        .expect("the shared palette resolves")
+        .palette;
+    assert_eq!(
+        shared[1].to_cols_array(),
+        preview[1].to_cols_array(),
+        "the crowd's shared palette is not the one the per-agent path builds"
+    );
+    // A machine with no asset behind it is still the rest pose, so a level with
+    // a dangling `.inf_sm` previews exactly as it did.
+    let dangling = AnimStateMachine {
+        sm: Some(uuid::Uuid::from_u128(0xDEAD)),
+        ..AnimStateMachine::default()
+    };
+    let fallback = reg
+        .resolve_skinned(&sm, None, None, Some(&dangling))
+        .expect("it still resolves")
+        .palette;
+    assert_eq!(
+        fallback[1].to_cols_array(),
+        rest[1].to_cols_array(),
+        "an unresolvable machine changed the preview — the fallback is the rest \
+         pose and nothing else"
+    );
+}
+
+/// A two-joint rig: a root and one child a metre up.
+fn two_joint_rig() -> Skeleton {
+    use inf_anim::skeleton::{Joint, JointTransform};
+    Skeleton::new(vec![
+        Joint {
+            name: "root".into(),
+            parent: None,
+            local_bind: JointTransform::default(),
+            inverse_bind: glam::Mat4::IDENTITY.to_cols_array(),
+        },
+        Joint {
+            name: "child".into(),
+            parent: Some(0),
+            local_bind: JointTransform::from_trs(
+                glam::Vec3::new(0.0, 1.0, 0.0),
+                glam::Quat::IDENTITY,
+                glam::Vec3::ONE,
+            ),
+            inverse_bind: glam::Mat4::from_translation(glam::Vec3::new(0.0, -1.0, 0.0))
+                .to_cols_array(),
+        },
+    ])
+    .expect("a two-joint rig is valid")
+}
+
+/// One triangle bound to joint 1 — enough geometry for a draw to resolve.
+fn one_triangle_skin() -> inf_render::SkinnedMeshData {
+    use inf_render::{SkinnedMeshData, SkinnedVertex};
+    let v = |x: f32| SkinnedVertex {
+        pos: [x, 0.0, 0.0],
+        normal: [0.0, 1.0, 0.0],
+        joints: [1, 0, 0, 0],
+        weights: [1.0, 0.0, 0.0, 0.0],
+        uv: [0.0, 0.0],
+    };
+    SkinnedMeshData {
+        vertices: vec![v(0.0), v(1.0), v(0.5)],
+        indices: vec![0, 1, 2],
+    }
+}
+
+/// **`SkinnedInstance` CARRIES `blend` AND `cutoff`, IN BOTH HOSTS** (CHAR1a
+/// carried 71, and FIX2's carried 40 with it).
+///
+/// A source arm, and deliberately: the two projectors are two inline loops in
+/// two crates that this test binary cannot both link and run a frame of, so what
+/// is checked is that the field reaches the literal FROM THE MATERIAL on both
+/// sides — not that it is present, which a hard-coded `blend: 0` would also
+/// satisfy. `projector_mirror.rs`'s field-for-field gate catches the two hosts
+/// disagreeing; this catches them agreeing on a constant.
+///
+/// **The mutation**: replace `blend,` with `blend: 0,` in the viewport's
+/// literal. The `blend_code(m.blend)` assertion still passes (the rigid path has
+/// one) and the "from the material, not a constant" assertion fails. Verified.
+#[test]
+fn the_skinned_instance_carries_blend_and_cutoff_from_the_material() {
+    let hosts = [
+        ("the editor viewport", "editor/crates/inf-viewport/src/host.rs"),
+        ("the shipped player", "runtime/inf-player/src/render.rs"),
+    ];
+    for (label, rel) in hosts {
+        let src = std::fs::read_to_string(repo().join(rel))
+            .unwrap_or_else(|e| panic!("{rel}: {e}"))
+            .replace("\r\n", "\n");
+        // The skeletal branch's own Material read — a seven-tuple since this
+        // wave, and the two new terms are the material's own.
+        assert!(
+            src.contains("let (color, metallic, roughness, emissive, blend, cutoff, vt) = w"),
+            "{label}'s skeletal branch does not read blend/cutoff from the Material"
+        );
+        // …and the literal takes them by NAME, so the value cannot be a
+        // constant that happens to look right on an opaque body.
+        let lit = src
+            .split("SkinnedInstance {")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{label} builds no SkinnedInstance"));
+        let body = &lit[..lit.find("});").unwrap_or(lit.len())];
+        for field in ["blend,", "cutoff,"] {
+            assert!(
+                body.contains(field),
+                "{label}'s SkinnedInstance does not carry `{field}` from the \
+                 material — an alpha-masked character draws solid"
+            );
+        }
+    }
+    // The renderer's own end of it: the field exists, is packed, and the shader
+    // reads it. A pass that carried the field and never uploaded it would pass
+    // every assertion above.
+    let pass = std::fs::read_to_string(repo().join("crates/inf-render/src/passes/skinned.rs"))
+        .expect("the skinned pass")
+        .replace("\r\n", "\n");
+    assert!(
+        pass.contains("inst.blend as f32 * 4.0 + inst.cutoff.clamp(0.0, 1.0)"),
+        "the skinned pass no longer packs blend/cutoff into `pbr.w`"
+    );
+    let wgsl = std::fs::read_to_string(
+        repo().join("crates/inf-render/src/shaders/skinned_mesh.wgsl"),
+    )
+    .expect("the skinned shader")
+    .replace("\r\n", "\n");
+    assert!(
+        wgsl.contains("if (in.pbr.w > 0.5 && in.pbr.w < 1.5 && in.color.a < in.pbr.z)"),
+        "the skinned fragment stage has no masked discard — a hair card draws solid"
+    );
+}
+
+/// **THE FEMALE BODY IS THE SAME RIG** — 161 names, in the same order, as the
+/// male's and as the mannequin's.
+///
+/// This is the whole interchange contract applied to the wave's own second
+/// body: a clip addresses a joint by INDEX, so two bodies that do not publish
+/// the same list in the same order cannot share one animation set, and the
+/// female body exists precisely to be dressed by the same clips.
+///
+/// **The mutation**: point `starter_character_f_spec` at `spine_segments: 3`
+/// (or any change that moves the rig's joint list). The name-equality assertion
+/// fails after a re-bless; without a re-bless the committed bytes still decode
+/// to 161 and the arm stays green, which is correct — it reads COMMITTED bytes,
+/// exactly like the male body's arm, and its doc says so. Verified by renaming
+/// joint 8 of the committed female `.inf_skel` in a scratch copy: red at the
+/// name-list assertion.
+#[test]
+fn the_female_committed_body_publishes_the_same_161_names() {
+    let male: inf_anim::SkeletonAsset = decode_committed("samples/starter-character/Starter.inf_skel");
+    let female: inf_anim::SkeletonAsset =
+        decode_committed("samples/starter-character-f/Starter_F.inf_skel");
+    assert_eq!(female.skeleton.len(), 161, "the female rig is not the mannequin's");
+    assert_eq!(
+        names(&female.skeleton),
+        names(&male.skeleton),
+        "the two committed bodies publish different joint lists — one clip \
+         cannot play on both"
+    );
+    assert_eq!(
+        names(&female.skeleton),
+        names(&manny()),
+        "the female rig is not the name list `manny::build_manny` publishes —          and that list is the one the first arm pins against the mannequin's own"
+    );
+
+    // …and she is a DIFFERENT BODY, not a copy: the measured proportions have
+    // to reach the bind pose or the folder is 368 KB of duplicate.
+    // The joint's WORLD bind position, from the inverse bind matrix it stores —
+    // the same number `char1a2_measure_quinn.py` read off the glTF, derived on
+    // this side of the bridge rather than trusted from the other.
+    let at = |sk: &Skeleton, n: &str| -> glam::Vec3 {
+        let i = sk.index_of(n).unwrap_or_else(|| panic!("no joint {n}"));
+        sk.joint(i as usize)
+            .expect("the index came from the skeleton")
+            .inverse_bind_mat()
+            .inverse()
+            .to_scale_rotation_translation()
+            .2
+    };
+    let span = |sk: &Skeleton| (at(sk, "upperarm_l").x - at(sk, "upperarm_r").x).abs();
+    let hips = |sk: &Skeleton| (at(sk, "thigh_l").x - at(sk, "thigh_r").x).abs();
+    let (ms, fs) = (span(&male.skeleton), span(&female.skeleton));
+    let (mh, fh) = (hips(&male.skeleton), hips(&female.skeleton));
+    assert!(
+        fs < ms * 0.90,
+        "the female body's shoulders are {fs:.4} m against the male's {ms:.4} — \
+         Quinn measures 0.3211 and this rig does not"
+    );
+    // **The SHOULDER-TO-HIP RATIO, not the hip width.** Measured: the committed
+    // male is 0.40 / 0.22 = 1.818 and the female 0.3211 / 0.2231 = 1.439, a
+    // ratio of 0.79 — that is the silhouette difference, and it is the one an
+    // absolute hip comparison cannot see. The male's 0.22 m hip is a wizard
+    // DEFAULT and not a measurement (Manny's own is 0.1994 at 1.8054 m, so the
+    // committed male is relatively wider in the hips than the mannequin he
+    // stands for) — the same family of invented defaults this wave carries the
+    // arm ratio for, and the reason this arm compares shapes rather than
+    // millimetres.
+    assert!(
+        fs / fh < (ms / mh) * 0.85,
+        "the two committed bodies have the same silhouette: shoulders/hips is \
+         {:.3} for the female and {:.3} for the male",
+        fs / fh,
+        ms / mh
+    );
+    // **And their heads land 2.2 mm apart**, which is what this arm found when
+    // it tried to assert stature — so it does not. Hers is built on a 1.8017 m
+    // mesh and his on the wizard's 1.75 m default, but her MEASURED
+    // `head_height_ratio` is 0.9021 against his 0.93: 1.8017 x 0.9021 = 1.6253
+    // and 1.75 x 0.93 = 1.6275. A taller body with a proportionally lower head
+    // is exactly what the two mannequins measure. "These are two rigs" therefore
+    // has to be asked of the SHAPE — and what can be asserted is that the bind
+    // poses differ by more than a centimetre somewhere, which a copied folder
+    // could not do.
+    let moved = MEASURED_JOINTS
+        .iter()
+        .map(|n| (at(&female.skeleton, n) - at(&male.skeleton, n)).length())
+        .fold(0.0f32, f32::max);
+    assert!(
+        moved > 0.01,
+        "the female rig's joints are within {moved:.4} m of the male's — the \
+         folder is a copy, not a second body"
+    );
+}
+
+/// The joints the female-body arm measures — one per girdle plus a limb, so a
+/// rig that moved only its arms and one that moved only its hips both show.
+const MEASURED_JOINTS: [&str; 6] = [
+    "pelvis",
+    "spine_05",
+    "clavicle_l",
+    "upperarm_l",
+    "hand_l",
+    "thigh_l",
+];
+
+/// Decode a committed skeleton asset by repo-relative path.
+fn decode_committed(rel: &str) -> inf_anim::SkeletonAsset {
+    let bytes = std::fs::read(repo().join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+    inf_asset::decode(&bytes).unwrap_or_else(|e| panic!("{rel} does not decode: {e}"))
+}
+
+/// **THE PACKED UE MASK LANDS IN ORM ORDER** (CHAR1a carried 76), and the AO
+/// comes out of the channel that HOLDS it.
+///
+/// Two swizzles, both read off the material and confirmed by a channel census
+/// of the exported PNGs rather than guessed from a name:
+///
+/// * `T_*_MSR_MSK` is metallic (R) / specular (G) / roughness (B); this
+///   engine's ORM is occlusion (R) / roughness (G) / metallic (B).
+/// * `T_*_AS?AO?MASK_MSK` is anisotropy (R) / **ambient occlusion (G)** / paint
+///   mask (B). The importer took plane R, whose mean over `T_Manny_01` is 3.5
+///   of 255 — so every character through this bridge had its ambient term
+///   multiplied by 0.014.
+///
+/// **The mutation**: swap `Some(0)` and `Some(2)` in `role_to_planes("msr")`.
+/// The metallic/roughness assertions fail (200 and 60 change places). Verified.
+/// Changing `aniso_ao_paint`'s `Some(1)` to `Some(0)` fails the occlusion
+/// assertion with 3 instead of 244 — which is the defect itself, reproduced.
+#[test]
+fn a_packed_ue_mask_swizzles_into_the_engines_orm_order() {
+    use inf_editor_core::assets::ue_import::{broadcast_channel, role_to_planes};
+    use inf_material::MapKind;
+
+    // One texel, four channels, all distinct so a wrong channel cannot look right.
+    let msr = [200u8, 120, 60, 255]; // metallic, specular, roughness
+    let aniso = [3u8, 244, 255, 255]; // anisotropy, AO, paint mask
+
+    let planes = role_to_planes("msr");
+    assert_eq!(
+        planes.len(),
+        2,
+        "an MSR mask fills TWO of the engine's slots, not one"
+    );
+    let metallic = planes
+        .iter()
+        .find(|(k, _)| *k == MapKind::Metallic)
+        .and_then(|(_, c)| *c)
+        .expect("msr names no metallic channel");
+    let roughness = planes
+        .iter()
+        .find(|(k, _)| *k == MapKind::Roughness)
+        .and_then(|(_, c)| *c)
+        .expect("msr names no roughness channel");
+    let occlusion = role_to_planes("aniso_ao_paint")
+        .iter()
+        .find(|(k, _)| *k == MapKind::Occlusion)
+        .and_then(|(_, c)| *c)
+        .expect("the AO mask names no occlusion channel");
+
+    let o = broadcast_channel(&aniso, occlusion);
+    let r = broadcast_channel(&msr, roughness);
+    let m = broadcast_channel(&msr, metallic);
+    let orm = inf_material::pack_orm(Some(&o), Some(&r), Some(&m), 1, 1)
+        .expect("one texel packs");
+    assert_eq!(
+        (orm[0], orm[1], orm[2]),
+        (244, 60, 200),
+        "the ORM is not (occlusion, roughness, metallic) — got \
+         {:?} from an MSR of {msr:?} and an AO mask of {aniso:?}",
+        &orm[..3]
+    );
+
+    // A role this engine has nowhere to put says so rather than racing for a
+    // slot: the mannequin binds a SECOND normal and a tangent field, and both
+    // used to be classified `normal`.
+    for role in ["normal_second", "tangent", "decal", "clearcoat"] {
+        assert!(
+            role_to_planes(role).is_empty(),
+            "`{role}` claims an engine slot — it is reported as unplaced, not placed"
+        );
+    }
+    assert_eq!(
+        role_to_planes("normal"),
+        &[(MapKind::Normal, None)],
+        "the `normal` role no longer fills the normal slot"
+    );
+}
+
+/// **THE MATERIAL'S OWN PARAMETER NAMES DECIDE THE ROLE**, and `BNormal` is not
+/// `Normal`.
+///
+/// The export side is Python and cannot be linked, so this reads the table as
+/// source — the same shape as the licence scanner arm above, and for the same
+/// reason: a rule stated in a file this repository owns is checkable from a file
+/// this repository owns.
+///
+/// It is not a spelling check. Each assertion is the ANSWER for one of the eight
+/// textures `M_Mannequin` binds, and three of them used to be wrong: `BNormal`
+/// and `Tangent` both classified as `normal` (three maps racing for one slot),
+/// and `LogoTexture` classified as `metallic` from the `_m$` name rule — so the
+/// hero's metal mask was the Unreal logo.
+///
+/// **The mutation**: delete the `"bnormal": "normal_second",` line. The
+/// substring fallback in `kind_of_texture` then matches `normal` inside
+/// `bnormal` again and the arm goes red on that key. Verified.
+#[test]
+fn the_mannequin_material_parameters_map_to_one_role_each() {
+    let src = std::fs::read_to_string(repo().join("tools/ue-export/export.py"))
+        .expect("export.py")
+        .replace("\r\n", "\n");
+    let table = src
+        .split("PARAM_KIND = {")
+        .nth(1)
+        .expect("export.py has no PARAM_KIND")
+        .split("\n}")
+        .next()
+        .expect("PARAM_KIND does not close");
+    for (param, role) in [
+        ("\"normal\"", "\"normal\""),
+        ("\"bnormal\"", "\"normal_second\""),
+        ("\"tangent\"", "\"tangent\""),
+        ("\"logotexture\"", "\"decal\""),
+        ("\"msrtex\"", "\"msr\""),
+        ("\"anisoaopaintmasktex\"", "\"aniso_ao_paint\""),
+        ("\"ccccrtex\"", "\"clearcoat\""),
+        ("\"base texture\"", "\"albedo\""),
+    ] {
+        let want = format!("{param}: {role}");
+        assert!(
+            table.contains(&want),
+            "`M_Mannequin`'s {param} parameter no longer maps to {role} — the \
+             classifier's exact table is what stops three normals racing for \
+             one slot"
+        );
+    }
+    // The exact table must be consulted BEFORE the substring fallback, which is
+    // the actual defect: `normal` is a substring of `bnormal`.
+    let f = src
+        .split("def kind_of_texture(")
+        .nth(1)
+        .expect("no kind_of_texture");
+    let exact = f.find("if p in PARAM_KIND:").expect("no exact lookup");
+    let loose = f.find("for key, kind in PARAM_KIND.items():").expect("no fallback");
+    assert!(
+        exact < loose,
+        "the substring fallback runs before the exact lookup — `BNormal` \
+         classifies as `normal` again"
+    );
+}

@@ -2092,6 +2092,128 @@ fn golden_skinned_mesh() {
     assert!(lit, "expected a lit skinned pixel");
 }
 
+/// **A SKINNED SURFACE CAN HAVE HOLES IN IT** (wave CHAR1a.2) — the golden that
+/// exists because until this wave it could not.
+///
+/// `SkinnedInstance` carried no `blend` and no `cutoff`, so every skinned draw in
+/// this engine was opaque: hair cards drew as solid slabs, eyelashes as tabs, a
+/// cut-out garment as a rectangle. The field rides the one free channel of an
+/// instance stream standing at the 16-attribute wall (`pbr.w`, as
+/// `blend * 4 + cutoff`) and `skinned_mesh.wgsl` tests it with the same two
+/// lines `mesh.wgsl` has had since R-P5.
+///
+/// # What the picture shows, and why it is a picture
+///
+/// Eight cards in a row on one skinned mesh, alternating alpha 0.9 / 0.2 against
+/// a cutoff of 0.5. Four survive, four are discarded — so the committed image is
+/// a **comb**, and a masked path that silently drew everything would be a solid
+/// wall. The alpha is per INSTANCE because that is where the rigid path reads it
+/// (`in.color.a`, before any texture is sampled), and mirroring the rigid rule is
+/// the point: two fragment stages that masked differently would be the
+/// PIE-versus-shipping divergence one file over.
+///
+/// The structural half runs with no committed pixels at all: the opaque control
+/// is rendered too, and the masked frame must have **strictly fewer** lit pixels.
+/// A golden alone could not tell "the mask worked" from "the fixture drew four
+/// cards".
+#[test]
+fn golden_skinned_masked() {
+    let Some(gpu) = gpu_or_skip() else { return };
+    let (sk, clip, _) = skinned_cylinder();
+    let mesh = std::sync::Arc::new(one_card());
+    let palette = palette_at(&sk, &clip, 0.0);
+
+    let card = |i: usize, blend: u8| SkinnedInstance {
+        vt: Default::default(),
+        translation: DVec3::new(-1.4 + 0.4 * i as f64, 0.0, 0.0),
+        rotation: Quat::IDENTITY,
+        scale: Vec3::ONE,
+        // The odd cards are BELOW the cutoff, so they are the holes.
+        color: [0.80, 0.62, 0.40, if i % 2 == 0 { 0.9 } else { 0.2 }],
+        metallic: 0.0,
+        roughness: 0.55,
+        emissive: [0.0; 3],
+        id: 1 + i as u32,
+        mesh: 0,
+        blend,
+        cutoff: 0.5,
+        palette: palette.clone(),
+        shadow: inf_render::SkinnedShadow::BindSphere,
+    };
+    let scene = |blend: u8| {
+        let mut s = RenderScene {
+            grid_enabled: true,
+            skinned_meshes: vec![mesh.clone()],
+            ..Default::default()
+        };
+        for i in 0..8 {
+            s.skinned.push(card(i, blend));
+        }
+        s.mark_dirty();
+        s
+    };
+
+    let view = look_view(DVec3::new(0.0, 1.1, 3.4), DVec3::new(0.0, 1.0, 0.0));
+    let opaque = render(&gpu, &scene(0), &view);
+    let masked = check_golden(&gpu, "skinned_masked", &scene(1), &view);
+
+    // **A CARD pixel, not a lit one.** `golden_skinned_mesh`'s predicate — the
+    // three channels summing past 150 — is an `any()` over a frame and is right
+    // for "did anything draw at all"; COUNTED over this frame it counts the sky,
+    // whose (40, 50, 70) already sums past it, and both frames come out at
+    // exactly 41 296 of 57 600 pixels. Measured, and it is why this arm asks for
+    // the cards' own warm tint instead: bright, and redder than it is blue,
+    // which the blue-grey sky and the grid are not.
+    let cards = |img: &[u8]| {
+        img.chunks(4)
+            .filter(|p| p[0] > 150 && p[0] as i16 - p[2] as i16 > 30)
+            .count()
+    };
+    let (o, m) = (cards(&opaque), cards(&masked));
+    assert!(o > 0, "the opaque control drew no cards at all");
+    assert!(
+        m < o,
+        "the masked row drew {m} card pixels and the opaque row {o} — the alpha \
+         test did not discard anything, so a hair card is still a slab"
+    );
+    // Four of eight cards survive, so the drawn area should land near half.
+    // Generous bounds: the cards are lit surfaces and the background is a grid,
+    // so this is a shape claim, not a pixel count.
+    let f = m as f64 / o as f64;
+    assert!(
+        (0.25..0.75).contains(&f),
+        "the masked row kept {f:.3} of the opaque row's card pixels — four of \
+         eight cards are above the cutoff, so neither 'all' nor 'none' is right"
+    );
+}
+
+/// ONE upright card, as a skinned mesh bound to the cylinder rig's joint 0 —
+/// the shape a hair groom has, at the size a golden can see.
+///
+/// One card and not eight: the eight are INSTANCES, and each carries its own
+/// alpha. A mesh that already held the row would draw the whole row at every
+/// instance's offset, the survivors would cover the discarded ones' gaps, and
+/// the masked frame would come out pixel-identical to the opaque one — which is
+/// exactly what the first version of this fixture did, and it read as "the alpha
+/// test does not work".
+fn one_card() -> SkinnedMeshData {
+    let (w, h) = (0.16f32, 0.9f32);
+    let mut vertices = Vec::new();
+    for (dx, y) in [(-w, 0.55f32), (w, 0.55), (w, 0.55 + h), (-w, 0.55 + h)] {
+        vertices.push(SkinnedVertex {
+            pos: [dx, y, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [(dx + w) / (2.0 * w), (y - 0.55) / h],
+            joints: [0, 0, 0, 0],
+            weights: [1.0, 0.0, 0.0, 0.0],
+        });
+    }
+    SkinnedMeshData {
+        vertices,
+        indices: vec![0, 1, 2, 0, 2, 3],
+    }
+}
+
 /// **A CROWD IS NOT A THOUSAND CLONES, AND IT IS ONE DRAW** (wave NPC1b).
 ///
 /// Eight copies of one skinned mesh, sharing **one** joint palette by `Arc` — the

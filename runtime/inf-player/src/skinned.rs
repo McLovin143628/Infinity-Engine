@@ -290,6 +290,13 @@ impl SkinnedRegistry {
         lock(&self.clips).insert(id, Some(Arc::new(clip)));
     }
 
+    /// Register a decoded state machine directly (wave CHAR1a.2) — the door the
+    /// preview-idle rule is measured through, and the twin of
+    /// [`insert_clip`](Self::insert_clip).
+    pub fn insert_state_machine(&mut self, id: Uuid, machine: inf_anim::StateMachine) {
+        lock(&self.state_machines).insert(id, Some(Arc::new(machine)));
+    }
+
     /// Resolve a [`SkeletalMesh`] (+ its optional [`AnimPlayer`], + the pose the
     /// sim evaluated for this entity) to a drawable skinned instance: bind-space
     /// geometry plus the skinning palette for the pose that is actually in force.

@@ -1302,7 +1302,7 @@ fn the_shared_tier_pose_is_identical_in_both_stores() {
         "let skeleton = self.skeleton(skeleton_id)?;",
         "if skeleton.is_empty() {",
         "let mesh = self.skinned_geometry(mesh_id, skeleton_id)?;",
-        "palette: self.rest_palette(&skeleton, (mesh_id, skeleton_id)),",
+        "palette: self.rest_palette(&skeleton, (mesh_id, skeleton_id, entry)),",
     ] {
         assert!(
             body.contains(fragment),
@@ -1420,6 +1420,15 @@ fn the_bind_space_rebuild_is_identical_in_both_stores() {
     }
 }
 
+/// Whitespace and rustfmt's trailing commas removed, so a source pin states a
+/// CLAIM rather than a line width (wave CHAR1a.2).
+fn squash(s: &str) -> String {
+    s.chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>()
+        .replace(",)", ")")
+}
+
 /// Fields of the `SkinnedInstance` literal whose value expression is **host-local
 /// by design** and therefore excluded from the value comparison (their presence
 /// and order still are not).
@@ -1484,8 +1493,13 @@ fn the_skinned_instance_projection_matches_field_for_field() {
         );
     }
     // A guard on the guard: an empty literal would satisfy everything above.
+    // **Twelve since wave CHAR1a.2**, when `blend` and `cutoff` joined the
+    // literal so a skinned surface could carry a hole. Raised deliberately with
+    // the field count rather than left at a floor two waves below it: a guard
+    // that trails the struct is a guard that would not notice the struct being
+    // cut back to what it used to be.
     assert!(
-        mine.len() >= 10,
+        mine.len() >= 12,
         "the `SkinnedInstance` projection shrank to {} fields — was it gutted?",
         mine.len()
     );
@@ -1568,9 +1582,19 @@ fn both_projectors_draw_skeletal_meshes_the_same_way() {
     ];
     for (label, path) in [("editor viewport", VIEWPORT), ("shipped player", PLAYER)] {
         let src = read(path).replace("\r\n", "\n");
+        // **Normalized, because rustfmt is allowed to have opinions** (wave
+        // CHAR1a.2). `resolve_skinned` grew a fourth argument, which pushed the
+        // viewport's call past the line width; rustfmt broke it across five
+        // lines and added a trailing comma. A pin written as one line then went
+        // red on a formatting change rather than on a divergence — the failure
+        // mode that teaches a reader to edit the gate instead of the code. The
+        // claim was never about line breaks, so both sides are squashed the same
+        // way: no whitespace at all, and a trailing comma before a `)` dropped.
+        let flat = squash(&src);
         for fragment in SHARED {
+            let fragment = &squash(fragment);
             assert!(
-                src.contains(fragment),
+                flat.contains(fragment),
                 "the {label}'s `SkeletalMesh` projection no longer contains \
                  `{fragment}` — either the skeletal path was changed on one side \
                  only, or this gate needs updating deliberately"
