@@ -1119,7 +1119,13 @@ proptest! {
         let mut session = MeshSession::new(base);
         drive(&mut session, &script);
         let (asset, report) = to_mesh_asset(session.mesh(), &ExportOptions::default());
-        prop_assert_eq!(asset.schema_version, 2);
+        // **The CURRENT version, not a literal 2** (wave CHAR1a.3). The number
+        // was 2 and `.inf_mesh` went to v3 for the material-slot table; a
+        // literal here pins the version this crate happened to write on the day
+        // it was authored, which is not the property this arm is about. What it
+        // is about is that a DCC export writes a payload the current readers
+        // accept, and that is exactly the constant.
+        prop_assert_eq!(asset.schema_version, inf_mesh::MeshAsset::CURRENT_VERSION);
         prop_assert_eq!(report.submeshes, asset.submeshes.len());
         for sm in &asset.submeshes {
             prop_assert_eq!(sm.indices.len() % 3, 0);

@@ -201,11 +201,15 @@ fn a_crowd_agents_hand_leaves_the_bind_pose() {
     );
     assert!(
         worst > 1e-3,
-        "the crowd's SHARED palette is the identity in every slot — every Far          agent draws the rig's bind pose, which on this rig is the A-pose the          CHAR1a audit photographed (carried 92)"
+        "the crowd's SHARED palette is the identity in every slot - every \
+         Far agent draws the rig's bind pose, which on this rig is the \
+         A-pose the CHAR1a audit photographed (carried 92)"
     );
     assert!(
         hand_off > 1e-3,
-        "the crowd's shared palette leaves hand_l at bind ({hand_off:.4}) while          moving something else — the street's arms are held out (carried 92)"
+        "the crowd's shared palette leaves hand_l at bind ({hand_off:.4}) \
+         while moving something else - the street's arms are held out \
+         (carried 92)"
     );
 
     let posed_rows: Vec<_> = rows

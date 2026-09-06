@@ -943,7 +943,9 @@ pub fn import_manifest(
     stamped += swept;
     if swept > 0 {
         report.advisories.push(format!(
-            "{swept} asset(s) in {} were produced by the import and are the              dependency of nothing, so their licence is {} — see `sweep_licences`",
+            "{swept} asset(s) in {} were produced by the import and are the \
+             dependency of nothing, so their licence is {} - see \
+             `sweep_licences`",
             dest.display(),
             if exact {
                 "this run's single pack"

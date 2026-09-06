@@ -1095,7 +1095,9 @@ fn the_skinned_instance_carries_blend_and_cutoff_from_the_material() {
     );
     assert!(
         pass.contains("match section {") && pass.contains("sec.blend,"),
-        "the skinned pass no longer takes blend/cutoff from a SECTION when the          instance has one — a face's eyelash slot would draw with the body's          blend mode"
+        "the skinned pass no longer takes blend/cutoff from a SECTION when \
+         the instance has one - a face's eyelash slot would draw with the \
+         body's blend mode"
     );
     let wgsl =
         std::fs::read_to_string(repo().join("crates/inf-render/src/shaders/skinned_mesh.wgsl"))
