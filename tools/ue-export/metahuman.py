@@ -10,7 +10,7 @@ Read-only with respect to the user's own Unreal project: nothing here opens it.
         -unattended -nop4 -nosplash -stdout -FullStdOutLogOutput -NoShaderCompile
 
     INF_UE_OUT      where the report is written               (required)
-    INF_MH_STAGE    "prepare"|"assemble"|"export"|"all"       (default "prepare")
+    INF_MH_STAGE    "prepare"|"assemble"|"combine"|"export"   (default "prepare")
     INF_MH_MALE     the plugin preset to base him on          (default "Dominic")
     INF_MH_FEMALE   the plugin preset to base her on          (default "Vivian")
     INF_MH_WORK     the content path to work under            (default "/Game/INF")
@@ -239,6 +239,217 @@ def assemble_one(tag):
     return out
 
 
+COMBINE_ROOT = os.environ.get("INF_MH_COMBINED", "/Game/INF/Combined")
+
+
+def _skeletal_meshes_under(prefix):
+    """Every `USkeletalMesh` under a content prefix, path-sorted."""
+    reg = registry()
+    try:
+        reg.scan_paths_synchronous([prefix], force_rescan=True)
+    except Exception:
+        pass
+    rows = []
+    ar = unreal.ARFilter(package_paths=[prefix], recursive_paths=True,
+                         class_names=["SkeletalMesh"])
+    for a in reg.get_assets(ar):
+        pkg = str(a.get_editor_property("package_name"))
+        nm = str(a.get_editor_property("asset_name"))
+        rows.append("%s.%s" % (pkg, nm))
+    rows.sort()
+    return rows
+
+
+def _slot_table(mesh):
+    """`[(slot name, material path, material)]` for one skeletal mesh."""
+    out = []
+    try:
+        for slot in mesh.get_editor_property("materials"):
+            mi = slot.get_editor_property("material_interface")
+            nm = str(slot.get_editor_property("material_slot_name"))
+            out.append((nm, mi.get_path_name() if mi is not None else None, mi))
+    except Exception as e:
+        say("slots of %s: %s" % (mesh.get_name(), e))
+    return out
+
+
+def combine_one(tag):
+    """**THE COMBINED FACE+BODY MESH** (wave CHAR1a.3, clause 1).
+
+    `UMetaHumanCharacterExportBlueprintLibrary.ExportGeometry` with
+    `bFullBodySkeletalMesh` routes to
+    `MetaHumanCharacterEditorSubsystem::CreateCombinedFaceAndBodyMesh`, which is
+    the merge this engine would otherwise have had to write: ONE skeletal mesh
+    on ONE skeleton carrying both the body's joints and the face's, with the
+    neck seam welded by the tool that authored both halves.
+
+    Wave CHAR1a.2 recorded `export_geometry` as failing with
+    `Assertion failed: CurrentApplication.IsValid()` -- measured **in a
+    commandlet**, which has no Slate application. This runs in a LIVE editor
+    (see `mh_remote.py`), which has one. The retry is the whole point.
+
+    # The materials, and why they have to be re-bound
+
+    The combined mesh comes out of the tool wearing a CLAY material on its
+    slots. The real materials exist -- they are the ones the ASSEMBLED
+    character's own `SKM_*_BodyMesh` and `SKM_*_FaceMesh` wear -- so the slots
+    are re-bound **by slot name** from those two meshes here, in UE, before the
+    glTF crossing. Doing it here rather than at import keeps the bridge and the
+    importer exactly what they were for the mannequins: a skeletal mesh with N
+    material slots, N of which name real materials with real textures.
+
+    Every slot is reported -- matched by name, already correct, or left clay --
+    because a silent clay slot is a grey patch on a face.
+    """
+    ss = subsystem()
+    name = "INF_%s" % tag
+    ch = unreal.load_asset("%s/%s.%s" % (WORK, name, name))
+    if ch is None:
+        raise RuntimeError("%s/%s does not exist -- run prepare+assemble first"
+                           % (WORK, name))
+    out = {"name": name, "tag": tag, "project_path": COMBINE_ROOT}
+    before = set(_skeletal_meshes_under(COMBINE_ROOT))
+    if not ss.try_add_object_to_edit(ch):
+        raise RuntimeError("try_add_object_to_edit returned False for " + name)
+    try:
+        params = unreal.MetaHumanGeometryExportParams()
+        params.set_editor_property("project_path", COMBINE_ROOT)
+        params.set_editor_property("head_skeletal_mesh", False)
+        params.set_editor_property("body_skeletal_mesh", False)
+        params.set_editor_property("full_body_skeletal_mesh", True)
+        params.set_editor_property("overwrite_existing_assets", True)
+        unreal.MetaHumanCharacterExportBlueprintLibrary.export_geometry(ch, params)
+    finally:
+        if ss.is_object_added_for_editing(character=ch):
+            ss.remove_object_to_edit(character=ch)
+    unreal.EditorAssetLibrary.save_directory(COMBINE_ROOT, only_if_is_dirty=False,
+                                             recursive=True)
+    after = _skeletal_meshes_under(COMBINE_ROOT)
+    out["created"] = [p for p in after if p not in before]
+    out["all_under_root"] = after
+    # The combined mesh: whichever asset under the root names this character.
+    # Named rather than taken at index 0, because the root accumulates one
+    # asset per character and a run for Vivian must not re-bind Dominic's.
+    mine = [p for p in after if tag.lower() in p.lower()]
+    if not mine:
+        raise RuntimeError("export_geometry produced no skeletal mesh naming %s "
+                           "under %s (found %s)" % (tag, COMBINE_ROOT, after))
+    path = mine[0]
+    out["combined"] = path
+    mesh = unreal.load_asset(path)
+    if mesh is None:
+        raise RuntimeError("combined mesh %s did not load" % path)
+    sk = mesh.get_editor_property("skeleton")
+    out["skeleton"] = sk.get_path_name() if sk else None
+    out["bones"] = len(sk.get_editor_property("bone_tree")) if sk else 0
+    try:
+        out["lods"] = int(mesh.get_num_lods())
+    except Exception:
+        out["lods"] = None
+    try:
+        b = mesh.get_bounds()
+        out["bounds_extent_cm"] = [float(b.box_extent.x), float(b.box_extent.y),
+                                   float(b.box_extent.z)]
+    except Exception as e:
+        out["bounds_error"] = str(e)
+
+    # -- the real materials, by slot name --------------------------------
+    donors = {}
+    donor_order = []
+    for src in _skeletal_meshes_under("%s/%s" % (BUILD_ROOT, name)):
+        m = unreal.load_asset(src)
+        if m is None:
+            continue
+        for slot_name, mat_path, mi in _slot_table(m):
+            if mi is None:
+                continue
+            donors.setdefault(slot_name, (mat_path, mi))
+            donor_order.append((src, slot_name, mat_path))
+    out["donor_slots"] = [{"mesh": a, "slot": b, "material": c}
+                          for a, b, c in donor_order]
+
+    slots = _slot_table(mesh)
+    out["slots_before"] = [{"slot": s, "material": p} for s, p, _ in slots]
+    rebound = []
+    arr = []
+    for i, (slot_name, mat_path, mi) in enumerate(slots):
+        hit = donors.get(slot_name)
+        how = "kept"
+        if hit is not None and hit[0] != mat_path:
+            mi = hit[1]
+            how = "by-name"
+        elif hit is not None:
+            how = "already-correct"
+        sm = unreal.SkeletalMaterial()
+        sm.set_editor_property("material_interface", mi)
+        sm.set_editor_property("material_slot_name", unreal.Name(slot_name))
+        arr.append(sm)
+        rebound.append({"index": i, "slot": slot_name, "how": how,
+                        "material": mi.get_path_name() if mi else None})
+    out["slots_after"] = rebound
+    out["clay_left"] = [r["slot"] for r in rebound
+                        if r["material"] and "clay" in r["material"].lower()]
+    try:
+        mesh.set_editor_property("materials", arr)
+        unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
+    except Exception as e:
+        out["rebind_error"] = str(e)
+        say("REBIND FAILED on %s: %s" % (path, e))
+    return out
+
+
+def probe_materials(tag):
+    """Every texture parameter of every material the assembled and combined
+    meshes wear, with its compression and sRGB flag -- the table
+    `ue_import::role_to_planes` is extended from (wave CHAR1a.3, clause 5).
+
+    Probed rather than guessed, exactly as CHAR1a.2 probed `M_Mannequin`: a
+    MetaHuman material's parameter names are the pipeline's, not the
+    mannequin's, and a bridge that classifies them by substring puts a cavity
+    map in the normal slot.
+    """
+    name = "INF_%s" % tag
+    rows = []
+    seen = set()
+    for src in (_skeletal_meshes_under("%s/%s" % (BUILD_ROOT, name))
+                + _skeletal_meshes_under(COMBINE_ROOT)):
+        m = unreal.load_asset(src)
+        if m is None:
+            continue
+        for slot_name, mat_path, mi in _slot_table(m):
+            if mi is None or mat_path in seen:
+                continue
+            seen.add(mat_path)
+            row = {"mesh": src, "slot": slot_name, "material": mat_path,
+                   "class": mi.get_class().get_name(), "textures": []}
+            try:
+                par = mi.get_editor_property("parent")
+                row["parent"] = par.get_path_name() if par else None
+            except Exception:
+                row["parent"] = None
+            try:
+                for p in mi.get_editor_property("texture_parameter_values"):
+                    pn = str(p.get_editor_property("parameter_info")
+                             .get_editor_property("name"))
+                    t = p.get_editor_property("parameter_value")
+                    if t is None:
+                        row["textures"].append({"param": pn, "texture": None})
+                        continue
+                    row["textures"].append({
+                        "param": pn,
+                        "texture": t.get_path_name(),
+                        "compression": str(t.get_editor_property("compression_settings")),
+                        "srgb": bool(t.get_editor_property("srgb")),
+                        "w": int(t.blueprint_get_size_x()),
+                        "h": int(t.blueprint_get_size_y()),
+                    })
+            except Exception as e:
+                row["error"] = str(e)
+            rows.append(row)
+    rows.sort(key=lambda r: (r["material"], r["slot"]))
+    return rows
+
+
 def instructions():
     """The one interactive step, printed with the paths already filled in."""
     proj = unreal.Paths.get_project_file_path()
@@ -330,6 +541,14 @@ def run():
             rec = step("assemble_%s" % tag, lambda t=tag: assemble_one(t))
             if rec.get("ok"):
                 REPORT["characters"].append(rec["result"])
+
+    if STAGE in ("combine", "all"):
+        for tag in (MALE, FEMALE):
+            rec = step("combine_%s" % tag, lambda t=tag: combine_one(t))
+            if rec.get("ok"):
+                REPORT["characters"].append(rec["result"])
+        for tag in (MALE, FEMALE):
+            step("probe_materials_%s" % tag, lambda t=tag: probe_materials(t))
 
     if STAGE in ("export", "all"):
         step("census_built", lambda: built_bodies())

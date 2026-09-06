@@ -259,6 +259,15 @@ CHARACTERS = [
         "skeletal_prefix": [
             {"prefix": "/Game/INF/Built", "match": r"^SKM_.*_(Body|Face)Mesh$",
              "limit": 8},
+            # **THE COMBINED BODY** (wave CHAR1a.3). `metahuman.py`'s `combine`
+            # stage writes one skeletal mesh per character here -- face and body
+            # welded onto one skeleton by UE's own
+            # `CreateCombinedFaceAndBodyMesh`, with the real materials re-bound
+            # by slot name over the clay ones the export applies. This is the
+            # asset the island's hero wears; the Body/Face pair above still
+            # crosses because a wave that has to prove the merge needs both
+            # halves to measure against.
+            {"prefix": "/Game/INF/Combined", "limit": 4},
         ],
         "clips": [],
     },
@@ -885,6 +894,24 @@ def gltf_facts(dst):
                 verts += acc[pos].get("count", 0)
     out["triangles"] = tris
     out["vertices"] = verts
+    # **HOW MANY JOINTS THE CLIP ACTUALLY MOVES** (wave CHAR1a.3, carried 93).
+    # A file count is not a clip census: 124 of the 164 sequences wave CHAR1a.2
+    # exported carry `root` + one virtual bone and six channels against a
+    # 68-bone skeleton, and every one of them was reported as "crossed". The
+    # number here is the distinct animation-channel TARGET NODES, read off the
+    # artifact, so "exported" and "animates something" are two different
+    # statements that can be compared.
+    animated = set()
+    for anim in j.get("animations", []):
+        for ch in anim.get("channels", []):
+            node = (ch.get("target") or {}).get("node")
+            if node is not None:
+                animated.add(node)
+        out.setdefault("animation_channels", 0)
+        out["animation_channels"] += len(anim.get("channels", []))
+    out["animated_joints"] = len(animated)
+    out["animated_joint_names"] = sorted(
+        nodes[i].get("name", "") for i in animated if i < len(nodes))
     prims = (j.get("meshes") or [{}])[0].get("primitives", [])
     out["primitives"] = len(prims)
     if prims:
@@ -995,6 +1022,92 @@ def add_skeletal_mesh(path, pack):
     return k
 
 
+# Skeleton object path -> the richest compatible skeletal mesh, cached.
+PREVIEW_FOR_SKELETON = {}
+
+
+def richest_compatible_mesh(skeleton_path):
+    """**The skeletal mesh with the MOST bones that plays on this skeleton.**
+
+    # The defect this closes (wave CHAR1a.3, carried 93)
+
+    `UGLTFAnimSequenceExporter` writes bone tracks for the bones of a
+    **preview mesh**, not for the bones of the sequence's skeleton:
+
+        const USkeletalMesh* SkeletalMesh = FGLTFExporterUtilities::GetPreviewMesh(AnimSequence);
+        ...
+        FGLTFBoneUtilities::GetBoneIndices(SkeletalMesh->GetRefSkeleton(), BoneIndices);
+
+    and `GetPreviewMesh` falls back, when neither the sequence nor its skeleton
+    names one, to `FindCompatibleMesh` -- **the first** mesh in the registry
+    that happens to share the skeleton. On this project that is a two-bone
+    helper (`root` + a virtual bone), so 124 of 164 clips exported six channels
+    each and looked like files. A shell plays as a bind pose, which on this rig
+    is a T.
+
+    So the mesh is CHOSEN rather than found: among every `USkeletalMesh` whose
+    `skeleton` is this one, the one with the most bones in its own reference
+    skeleton. Ties break on the path, so the choice is the same choice twice.
+    """
+    if skeleton_path in PREVIEW_FOR_SKELETON:
+        return PREVIEW_FOR_SKELETON[skeleton_path]
+    best = None
+    best_n = -1
+    for a in REG.get_assets(unreal.ARFilter(class_names=["SkeletalMesh"],
+                                            recursive_classes=True)):
+        # The asset registry carries a `Skeleton` tag on every skeletal mesh, so
+        # the candidate set is filtered WITHOUT loading a package: a project with
+        # a thousand meshes must not cost a thousand loads to answer this.
+        tag = a.get_tag_value("Skeleton")
+        if tag is None:
+            continue
+        tag = str(tag)
+        if skeleton_path not in tag and tag not in skeleton_path:
+            continue
+        key = "%s.%s" % (str(a.get_editor_property("package_name")),
+                         str(a.get_editor_property("asset_name")))
+        m = unreal.load_asset(key)
+        if m is None:
+            continue
+        try:
+            sk = m.get_editor_property("skeleton")
+        except Exception:
+            continue
+        if sk is None or sk.get_path_name() != skeleton_path:
+            continue
+        n = bone_count_of_mesh(m)
+        if n > best_n or (n == best_n and best is not None and key < best[0]):
+            best_n = n
+            best = (key, m)
+    PREVIEW_FOR_SKELETON[skeleton_path] = best
+    if best is not None:
+        say("  preview mesh for %s -> %s (%d bones)"
+            % (skeleton_path.split(".")[-1], best[0].split(".")[-1], best_n))
+    return best
+
+
+def bone_count_of_mesh(mesh):
+    """Bones in a skeletal mesh's OWN reference skeleton -- **what the glTF
+    exporter walks** (`FGLTFBoneUtilities::GetBoneIndices(SkeletalMesh->
+    GetRefSkeleton(), ...)`), which is not the same list as the rig's
+    `bone_tree`: a mesh can be bound to a 68-bone skeleton and carry two bones
+    of its own, and that mesh exports a two-bone clip.
+
+    A transient component answers, the same door `socket_list` uses; the rig's
+    count is the fallback so the number is never silently zero."""
+    try:
+        comp = unreal.SkeletalMeshComponent()
+        comp.set_skeletal_mesh_asset(mesh)
+        return int(comp.get_num_bones())
+    except Exception:
+        pass
+    try:
+        return len(mesh.get_editor_property("skeleton")
+                   .get_editor_property("bone_tree"))
+    except Exception:
+        return 0
+
+
 def add_clip(pkg, name, pack):
     path = "%s.%s" % (pkg, name)
     if path in CLIPS:
@@ -1036,11 +1149,37 @@ def add_clip(pkg, name, pack):
         fname = rel("clips", "%s.gltf" % k)
         dst = os.path.join(OUT, fname.replace("/", os.sep))
         ensure(os.path.dirname(dst))
+        # **THE PREVIEW MESH IS THE BONE SET** -- see `richest_compatible_mesh`.
+        # Set in MEMORY for the duration of the export and put back afterwards:
+        # this script exports from the user's own project and never writes to
+        # it, so the property is restored and nothing is saved. (`run()` also
+        # turns the editor's autosave off for the session, so an unrelated timer
+        # cannot write the change out.)
+        restore = None
+        chosen = None
+        if rec.get("skeleton"):
+            pick = richest_compatible_mesh(rec["skeleton"])
+            if pick is not None:
+                chosen = pick
+                try:
+                    restore = seq.get_editor_property("preview_skeletal_mesh")
+                    seq.set_editor_property("preview_skeletal_mesh", pick[1])
+                    rec["preview_mesh"] = pick[0]
+                    rec["preview_mesh_bones"] = bone_count_of_mesh(pick[1])
+                except Exception as e:
+                    rec["preview_mesh_error"] = str(e)
+                    restore = None
         try:
             ok = export_task(seq, dst, None, skeletal_export_options(0))
         except Exception as e:
             ok = False
             ERRORS.append("gltf clip %s: %s" % (path, e))
+        finally:
+            if restore is not None or chosen is not None:
+                try:
+                    seq.set_editor_property("preview_skeletal_mesh", restore)
+                except Exception:
+                    pass
         if ok and os.path.isfile(dst):
             rec["file"] = fname
             rec["disposition"] = "exported"
@@ -1274,6 +1413,18 @@ def run():
             "packs are licensed content. Choose a directory outside it.")
         return
     ensure(OUT)
+    # **NOTHING IS WRITTEN TO THE PROJECT THIS RUNS IN** (wave CHAR1a.3). The
+    # clip export has to bind a preview mesh onto each sequence for the duration
+    # of its export (see `richest_compatible_mesh`) and puts it back afterwards
+    # -- but the editor's own autosave timer would happily write the transient
+    # change to disk in the middle of a sweep, in the user's project. So it is
+    # turned off for the session, and the fact is said rather than assumed.
+    try:
+        _st = unreal.get_default_object(unreal.EditorLoadingSavingSettings)
+        _st.set_editor_property("auto_save_enable", False)
+        say("AUTOSAVE disabled for this session (nothing is written to the project)")
+    except Exception as _e:
+        say("AUTOSAVE could not be disabled: %s" % _e)
     say("BEGIN mode=%s out=%s maxtex=%d" % (MODE, OUT, MAXTEX))
     t0 = datetime.datetime.now(datetime.timezone.utc)
     packs = []
