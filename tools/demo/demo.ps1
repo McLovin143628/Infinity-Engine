@@ -178,23 +178,19 @@ Start-Sleep -Seconds 10
 #    stream and is the frame a claim about the editor may be made on.
 Say "waiting $EditorSettleS s for the editor's own streaming to settle"
 Start-Sleep -Seconds $EditorSettleS
-if ($PlaceFemale -and (Get-Command node -ErrorAction SilentlyContinue)) {
-    Say "placing the FEMALE committed body beside the pawn (document only; never saved)"
-    & node (Join-Path $PSScriptRoot "place.mjs") $Port 2>&1 | ForEach-Object { Say "  cdp: $_" }
-    if ($LASTEXITCODE -ne 0) { Say "  place.mjs exit $LASTEXITCODE" }
-    Start-Sleep -Seconds 3
-}
-& powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "01b-editor-settled.png") -WindowTitle "Infini" -Foreground |
-    ForEach-Object { Say $_ }
-
-# ── 2b. THE PORTRAIT ─────────────────────────────────────────
+# ── 2a. THE PORTRAIT ─────────────────────────────────────────
 #
 # A wave that puts a face on the island has to photograph a face. The loop's own
 # camera sits behind the character, so the head is thirty pixels of a 1080p frame
 # — which is how wave CHAR1a.3 shipped two BLANK heads and called them "real
-# faces". `portrait.mjs` turns the hero to the camera, puts a marker at his head
-# and presses the editor's own Focus, all in the open document; the frame after
-# it is a portrait. See tools/demo/portrait.mjs.
+# faces". `portrait.mjs` moves the hero onto the editor camera's own view ray a
+# metre out, in the open document, and `undo.mjs` puts him back; the frame
+# between the two is a portrait. See tools/demo/portrait.mjs for why the
+# CHARACTER moves and not the camera.
+# It runs BEFORE the female is placed: `scene_player_pawn` answered with the
+# newly placed body on one run in four, and the portrait then photographed her
+# instead of the hero. With one pawn in the document there is nothing to
+# resolve.
 if ($Portrait -and (Get-Command node -ErrorAction SilentlyContinue)) {
     Say "framing the hero's face (document only; never saved)"
     & node (Join-Path $PSScriptRoot "portrait.mjs") $Port 2>&1 | ForEach-Object { Say "  cdp: $_" }
@@ -209,6 +205,15 @@ if ($Portrait -and (Get-Command node -ErrorAction SilentlyContinue)) {
     }
     Start-Sleep -Seconds 2
 }
+
+if ($PlaceFemale -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    Say "placing the FEMALE committed body beside the pawn (document only; never saved)"
+    & node (Join-Path $PSScriptRoot "place.mjs") $Port 2>&1 | ForEach-Object { Say "  cdp: $_" }
+    if ($LASTEXITCODE -ne 0) { Say "  place.mjs exit $LASTEXITCODE" }
+    Start-Sleep -Seconds 3
+}
+& powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "01b-editor-settled.png") -WindowTitle "Infini" -Foreground |
+    ForEach-Object { Say $_ }
 
 # ── 3. press Play ────────────────────────────────────────────────────────────
 $pressed = $false
