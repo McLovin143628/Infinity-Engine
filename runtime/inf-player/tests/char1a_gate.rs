@@ -737,6 +737,68 @@ fn the_preview_pose_is_the_machines_entry_clip_and_not_the_bind_pose() {
     );
 }
 
+/// **AND IT RESOLVES THROUGH THE ASSET INDEX, ON COMMITTED CONTENT** — the half
+/// the arm above cannot see, and the half that was broken.
+///
+/// `the_preview_pose_is_the_machines_entry_clip_and_not_the_bind_pose` registers
+/// its machine with `insert_state_machine`, which puts it straight into the
+/// store's map. It therefore proves the RULE and says nothing about the LOOKUP —
+/// and the lookup was the thing that did not work: `INDEXED_EXTENSIONS` listed
+/// `inf_mesh`, `inf_skel` and `inf_anim` and **not `inf_sm`**, in both hosts, so
+/// `load_payload::<StateMachineAsset>` missed on every real `.inf_sm` and every
+/// character in the editor stood in its bind pose exactly as before the wave.
+/// The gate was green; the demo frame showed a body in a plain T.
+///
+/// So this arm opens the committed female character as a DIRECTORY — the same
+/// `from_dir` index a `--level` dev run takes — and asks for the pose the way a
+/// host does. Measured: the preview palette differs from the rest palette by
+/// **1.6514 m** at its worst joint, on a body whose idle moves `hand_l` 0.6252 m
+/// down out of the bind T.
+///
+/// **The mutation**: drop `"inf_sm"` from `INDEXED_EXTENSIONS`. The delta falls
+/// to 0.0000 and the arm goes red — which is the defect, reproduced. Verified.
+#[test]
+fn the_preview_pose_resolves_through_the_stores_own_asset_index() {
+    use inf_ecs::components::{AnimStateMachine, SkeletalMesh};
+    use inf_player::skinned::SkinnedRegistry;
+
+    let dir = repo().join("samples/starter-character-f");
+    let reg = SkinnedRegistry::from_dir(&dir);
+    assert!(
+        reg.has_content(),
+        "the committed female folder did not index"
+    );
+
+    let ids = |n: u128| uuid::Uuid::from_u128(0x5C10_00B0 + n);
+    let sm = SkeletalMesh {
+        mesh: Some(ids(2)),
+        skeleton: Some(ids(0)),
+    };
+    let machine = AnimStateMachine {
+        sm: Some(ids(6)),
+        ..AnimStateMachine::default()
+    };
+    let rest = reg
+        .resolve_skinned(&sm, None, None, None)
+        .expect("the committed body resolves from a dev dir");
+    let preview = reg
+        .resolve_skinned(&sm, None, None, Some(&machine))
+        .expect("…and so does its preview");
+    let worst = rest
+        .palette
+        .iter()
+        .zip(preview.palette.iter())
+        .map(|(a, b)| (a.w_axis - b.w_axis).length())
+        .fold(0.0f32, f32::max);
+    eprintln!("preview vs rest, through the index: {worst:.4} m");
+    assert!(
+        worst > 0.05,
+        "the preview palette is the rest palette ({worst:.4} m apart) — the \
+         machine did not resolve through the store's index, so the rule is \
+         inert on every real character"
+    );
+}
+
 /// A two-joint rig: a root and one child a metre up.
 fn two_joint_rig() -> Skeleton {
     use inf_anim::skeleton::{Joint, JointTransform};

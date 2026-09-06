@@ -97,11 +97,21 @@ const MAX_CONTENT_DEPTH: u32 = 16;
 /// `Material.asset` bindings out of this same index, so a `.inf_mat` (or the
 /// `.inf_mati` a binding may name, which resolves to its root) and the
 /// `.inf_tex` containers behind it have to be findable by GUID here.
-const INDEXED_EXTENSIONS: [&str; 7] = [
+///
+/// **`inf_sm` arrived with wave CHAR1a.2's preview idle, and its absence is the
+/// reason that feature shipped inert for one demo run.** `resolve_skinned` asks
+/// `machine_entry_clip` for the machine's entry clip; that asks
+/// `load_payload::<StateMachineAsset>`; and a `.inf_sm` that is not in this list
+/// is not in the index, so the lookup missed and every character in the viewport
+/// stood in its bind pose exactly as before. The gate could not see it — its arm
+/// registers the machine directly and never touches an index — and the demo
+/// frame could: a just-placed body in a plain T. The arm now takes both doors.
+const INDEXED_EXTENSIONS: [&str; 8] = [
     "inf_vmesh",
     "inf_mesh",
     "inf_skel",
     "inf_anim",
+    "inf_sm",
     "inf_mat",
     "inf_mati",
     "inf_tex",

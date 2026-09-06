@@ -87,9 +87,19 @@ use inf_mesh::MeshAsset;
 #[cfg(not(target_arch = "wasm32"))]
 use inf_render::SkinnedVertex;
 
-/// The loose asset extensions a dev-dir index covers — the three a
-/// `SkeletalMesh` + `AnimPlayer` pair can reach.
-const INDEXED_EXTENSIONS: [&str; 3] = ["inf_mesh", "inf_skel", "inf_anim"];
+/// The loose asset extensions a dev-dir index covers — the four a
+/// `SkeletalMesh` + `AnimPlayer` + `AnimStateMachine` triple can reach.
+///
+/// **`inf_sm` arrived with wave CHAR1a.2's preview idle, and its absence is the
+/// reason that feature shipped inert for one demo run.** `resolve_skinned` asks
+/// `machine_entry_clip` for the machine's entry clip; `machine_entry_clip` asks
+/// `load_payload::<StateMachineAsset>`; and a `.inf_sm` that is not in this list
+/// is not in the index, so the lookup missed, the rule fell through to the rest
+/// pose, and every character in the editor stood in its bind pose exactly as
+/// before. The gate did not see it because its arm registers the machine through
+/// `insert_state_machine` and never touches the index — the frame saw it. The
+/// arm now takes both doors.
+const INDEXED_EXTENSIONS: [&str; 4] = ["inf_mesh", "inf_skel", "inf_anim", "inf_sm"];
 
 /// A skeletal mesh resolved to something the skinned pass can draw.
 ///
