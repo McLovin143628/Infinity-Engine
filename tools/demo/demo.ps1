@@ -22,7 +22,14 @@ param(
     # were noticed by a person reading the log. Twelve metres is what a held W
     # buys in the seconds this script allows; five is clear of a settle, a slide
     # or a camera drift and far below anything a walking character does.
-    [double]$MinMetres = 5.0
+    [double]$MinMetres = 5.0,
+    # **How long the EDITOR is given to finish streaming** before the frame a
+    # claim about the editor is made on. CHAR1a photographed the viewport at
+    # 27/52 and could not tell an unresolved material from a dropped one.
+    [int]$EditorSettleS = 45,
+    # Place the second committed body beside the pawn before the editor frame,
+    # in the DOCUMENT only. See tools/demo/place.mjs for why it is not saved.
+    [bool]$PlaceFemale = $true
 )
 
 $ErrorActionPreference = "Continue"
@@ -128,6 +135,24 @@ if (-not $booted) { Say "debug port never opened; falling back to a fixed wait";
 Start-Sleep -Seconds 10
 
 & powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "01-editor.png") -WindowTitle "Infini" -Foreground |
+    ForEach-Object { Say $_ }
+
+# ── 2b. the SETTLED editor frame, and the female body in it ──────────────────
+#
+#    **The mid-stream frame is not the editor's answer** (CHAR1a's own caveat):
+#    the first shot above was taken while the toolbar still read `Loading
+#    world... 27/52`, so a body that had not resolved its material yet looked
+#    exactly like a body whose material was dropped. This one waits for the
+#    stream and is the frame a claim about the editor may be made on.
+Say "waiting $EditorSettleS s for the editor's own streaming to settle"
+Start-Sleep -Seconds $EditorSettleS
+if ($PlaceFemale -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    Say "placing the FEMALE committed body beside the pawn (document only; never saved)"
+    & node (Join-Path $PSScriptRoot "place.mjs") $Port 2>&1 | ForEach-Object { Say "  cdp: $_" }
+    if ($LASTEXITCODE -ne 0) { Say "  place.mjs exit $LASTEXITCODE" }
+    Start-Sleep -Seconds 3
+}
+& powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "01b-editor-settled.png") -WindowTitle "Infini" -Foreground |
     ForEach-Object { Say $_ }
 
 # ── 3. press Play ────────────────────────────────────────────────────────────
@@ -301,15 +326,40 @@ Start-Sleep -Milliseconds 800
 Say ("foreground after the click:  " + [InfInput]::Foreground())
 Say ("cursor while the game has the window: " + [InfInput]::CursorState())
 
+# **FOUR NAMED FRAMES, not two anonymous ones** (wave CHAR1a.2). A wave that is
+# asked whether the idle looks right cannot answer with a picture of a run. The
+# order is idle → walk → run because it is also the order the locomotion machine
+# transitions in, so a bad transition shows as a frame that does not match its
+# name.
+Say "IDLE: no input for 2 s"
+Start-Sleep -Seconds 2
+& powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "04-pie-idle.png") | ForEach-Object { Say $_ }
+
+Say "WALK: W tapped in 120 ms bursts, so the machine stays under the run threshold"
+for ($i = 0; $i -lt 6; $i++) {
+    [InfInput]::Down(0x11); Start-Sleep -Milliseconds 120; [InfInput]::Up(0x11)
+    Start-Sleep -Milliseconds 260
+}
+[InfInput]::Down(0x11)
+Start-Sleep -Milliseconds 350
+& powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "05-pie-walk.png") | ForEach-Object { Say $_ }
+[InfInput]::Up(0x11)
+
 Say "holding W"
 [InfInput]::Down(0x11)   # scancode: W
 Start-Sleep -Milliseconds 900
 & powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "02-pie-a.png") | ForEach-Object { Say $_ }
 Start-Sleep -Seconds 2
 & powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "03-pie-b.png") | ForEach-Object { Say $_ }
+& powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "06-pie-run.png") | ForEach-Object { Say $_ }
 Say ("cursor two seconds in: " + [InfInput]::CursorState())
 [InfInput]::Up(0x11)
 Say "released W"
+
+# One more after the release: the street the hero ran into, where the crowd is,
+# which is where a second body shows if the level offers one.
+Start-Sleep -Seconds 2
+& powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "07-pie-street.png") | ForEach-Object { Say $_ }
 
 # ── 6. what the hero did, in metres ──────────────────────────────────────────
 if (Test-Path $heroCsv) {

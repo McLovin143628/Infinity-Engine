@@ -26,6 +26,7 @@ use std::sync::Mutex;
 
 use inf_anim::BodyPlan;
 use inf_asset::{AssetId, AssetKind};
+use inf_ecs::components::GlobalTransform;
 use inf_editor_core::character::{
     build_character, CharacterPreviewSession, CharacterSpec, CHARACTER_FOLDER,
 };
@@ -218,9 +219,26 @@ pub async fn character_place_starter(
         id.map(|a| a.0)
             .ok_or_else(|| "the starter character's ids are not all fixed".to_string())
     };
-    let at = at.unwrap_or([0.0, 0.0, 0.0]);
     let guid = {
         let mut doc = super::scene::lock(&scene.doc)?;
+        // **No position means BESIDE THE PAWN, not the origin** (wave CHAR1a.2).
+        // `Place Actor ▸ Starter Character` with no click had one place to go and
+        // it was (0, 0, 0) — which on a 50 km² island is open water two towns
+        // away from anything, so the actor was placed correctly and could not be
+        // found. The pawn is asked for through `camera_subject`, the same door
+        // `scene_player_pawn` takes, so "where the player is" has one answer; the
+        // 1.5 m offset in X is a body's width, far enough not to intersect and
+        // near enough to be in the same shot.
+        let at = at.unwrap_or_else(|| {
+            inf_ecs::movement::camera_subject(doc.world())
+                .and_then(|g| doc.world().entity_of(g))
+                .and_then(|e| doc.world().world().get::<GlobalTransform>(e).copied())
+                .map(|t| {
+                    let p = t.translation();
+                    [p.x + 1.5, p.y, p.z]
+                })
+                .unwrap_or([0.0, 0.0, 0.0])
+        });
         let guid = doc.edit_create_character(
             if female {
                 inf_editor_core::samples::STARTER_CHARACTER_F_NAME
