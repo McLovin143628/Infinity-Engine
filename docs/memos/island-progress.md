@@ -34500,3 +34500,242 @@ as a lit grey.
     translucent instances in `gi::collect_primitives` (or voxelizing them with a
     transmittance) is the fix, and it belongs with carried 55's other
     unlit-surface work rather than in an audit.
+
+## Wave CHAR1a — the bodies (2026-09-05)
+
+The user's words behind the whole CHAR1 arc: *"the current character mannequins
+are very low quality and look bad … high quality, high poly, meshes and
+characters with the correct amount of bones"*, and *"double-check your work by
+seeing what it looks like in the game engine and then making improvements."*
+CHAR1a is the first of three: everything that comes through the bridge, and the
+body standing in the engine, proven visually.
+
+### WHAT THE BRIDGE COULD NOT DO, AND NOW DOES
+
+ASSET0 built the Unreal bridge for **static meshes only** — the string
+`SkeletalMesh` did not appear in `export.py`. The first job was to find out
+whether a skin could cross at all, and it can:
+
+| | measured |
+|---|---|
+| `SKM_Manny` | 4 LOD rungs, **161 joints**, inverse bind matrices present, 2 material slots, `JOINTS_0`+`JOINTS_1` / `WEIGHTS_0`+`WEIGHTS_1` |
+| `SKM_Quinn` | the same, on the same `SK_Mannequin` |
+| joint names | `root, pelvis, spine_01…spine_05, neck_01, neck_02, head, …` — the manny.rs table, verbatim |
+| clips | 134 exported (10 mannequin + 124 ALS); 10 ALS `ALS_CLF_*` refused to write and are named |
+| wall clock | 31.0 s cold for the whole character sweep |
+
+`export_vertex_skin_weights` is the option that makes it work; without it UE
+writes the bind pose as a static mesh and the file looks perfectly healthy and
+animates never.
+
+### THE LADDER IS CHOSEN BY MEASUREMENT, NOT BY POSITION
+
+**Measured on SKM_Manny**: its four exported rungs are **92 178 / 92 178 /
+26 998 / 12 998** triangles. LOD 1 is a *copy* of LOD 0. "Store the first three"
+would have written 92 178 twice — 4.1 MB of duplicate `.inf_mesh` per body — and
+put a switch at 32 m that changes nothing on screen while costing a mesh swap.
+`distinct_rungs` selects on the triangle count the exporter measured, so the
+stored ladder is **92 178 / 26 998 / 12 998** (3.4:1 then 2.1:1). Quinn:
+87 280 / 26 998 / 12 998.
+
+The switch distances are **0 / 32 / 96 m**, and they are not three numbers
+somebody liked: they are `inf_ecs::crowd`'s own `DEFAULT_CROWD_FULL_M` and
+`DEFAULT_CROWD_NEAR_M`, asserted against the constants rather than against
+literals. A body's geometry and its simulation change at the same distance, so
+it cannot be posed by the whole animation graph while drawing its cheapest mesh.
+
+**A skinned mesh never reaches the meshlet path** — `MeshAsset::vgeom_streams`
+emits positions/normals/uvs/tangents/indices and drops the skin — so unlike a
+rigid mesh, whose coarser rungs ASSET0 records and throws away, a character's
+ladder has to be stored rung by rung. That answers ROAD1b's carried item 34 for
+this wave without measuring it: the quadratic DAG builder is not on a
+character's path at all.
+
+### EIGHT INFLUENCES BECOME FOUR, AND THE LOSS IS A NUMBER
+
+UE writes two `JOINTS_n` sets — eight influences a vertex. `VertexSkin` holds
+four. Measured on SKM_Manny LOD 0 (48 779 vertices, WEIGHTS as normalized u8):
+
+* **15 431 vertices (31.63%)** carry a non-zero influence in set 1;
+* the weight mass they lose to the cap is **mean 0.0596, median 0.0510,
+  p95 0.1333, max 0.2824** (first primitive, 9 561 of 28 678), which
+  `normalized()` divides back out — so the kept bones absorb up to 28% more
+  motion than the author gave them at the worst vertex;
+* **zero** of the 48 779 set-0 quadruples arrive out of order. Unreal sorts.
+
+So the importer now reads both sets and keeps the four heaviest, and that sort
+rescues nothing *on this content* — it is a guard, not a fix. The guard is the
+point: glTF does not promise the order, and an exporter that does not sort would
+skin a vertex to its four LIGHTEST bones and renormalize the error to a
+healthy-looking 1.0.
+
+### CLIPS ARE RETARGETED BY NAME, AT IMPORT
+
+A clip addresses a joint by INDEX. The ALS set is authored on the **68-bone**
+UE4 mannequin; the bodies are on the 161-bone UE5 one. Imported naively, an ALS
+clip's shoulder plays on the mannequin's elbow.
+
+`inf_anim::retarget::retarget_clip` rewrites each track to address the target,
+copying rotations bind-relatively (`dst = dst_bind · src_bind⁻¹ · src_anim`) and
+**preserving every key time** — a rewrite, not a resample. It is not run through
+`import_file`, because a clip glTF carries its own copy of the source skin and
+126 ALS clips would have written 126 identical `.inf_skel` assets that nothing
+plays.
+
+**The chain-infill rule, stated because it is a choice.** UE4's mannequin has
+three spine segments and one neck bone; UE5's has five and two. Name-matching
+alone leaves `spine_04`, `spine_05` and `neck_02` at bind while `spine_03` and
+`neck_01` carry the whole bend — a back that hinges at one vertebra. So the top
+source joint's delta is split evenly across itself and its infill joints, each
+getting `pslerp(IDENTITY, delta, 1/n)`. The gate measures the composition:
+**0.0 rad residual** against the source bend, with the control (infill off)
+bending one vertebra. Twist bones are deliberately **not** infilled — a twist is
+driven from the rig's own `TwistDriver` table and a split rotation would fight
+the driver.
+
+Measured across the whole set: **71 of 79 tracks** retargeted per ALS clip — 68
+joints written, 3 infilled, 11 ALS-only bones (IK, virtual, weapon sockets)
+dropped and named. 124 clips landed.
+
+### THE COMMITTED BODY, AND THE HAND
+
+`BodyOptions::default()` goes from 10/14/5/14/8 to **32/48/10/44/26**. The
+written mesh: **3 867 vertices / 5 718 triangles**, up from 1 247 / 1 498.
+Generation 2.03 ms; the heat solve over 63 deform bones **2.84 s**. The
+unreached-vertex advisory moves from 35 to 102 — **2.81% of vertices before,
+2.64% after**, so a denser cage buries a slightly smaller share of itself.
+
+**This is not MetaHuman-class and the ceiling is structural**, stated rather
+than left to be discovered: the generator builds the body as tubes whose ring
+count is set by the bone chain, so raising the segment counts four-fold buys
+3.8x the triangles and then stops. Going to 90 000 needs a subdivision pass with
+skin-weight interpolation on the post-subdivision cage, and the heat solve is
+O(V x bones) — 2.84 s at 3 867 vertices already. Named for CHAR1b with the
+measurement rather than claimed here.
+
+**The hand ratio is measured now.** SK1a authored `HAND_OF_HEIGHT = 0.105`,
+recording the reference's value as "about 0.096" read off a `.uasset` against a
+rig "~178 cm tall". The bridge exports the mesh, so both halves are measurable:
+a **0.1720 m** middle-finger chain (the sum of the four local bind translation
+magnitudes, which are rotation-independent) on a **1.8054 m** mesh = **0.0953**.
+Quinn: 0.1720 / 1.8017 = 0.0955. Every generated rig's hand was **10% too big**
+— visible the moment a character holds a weapon, which is what the SK1c grip
+catalogue was authored against.
+
+### THE METAHUMAN DOOR, AND THE ONE STEP THAT IS NOT HEADLESS
+
+`tools/ue-export/metahuman.py` works in a **scratch** project, so the user's own
+Unreal project is never written to. Headless, proven in a commandlet with no
+window and no human:
+
+* create a `UMetaHumanCharacter` and duplicate one of the **29 presets the
+  plugin ships** (`/MetaHumanCharacter/Optional/Presets`, Ada … Zuri). Basing on
+  a preset is what makes this scriptable at all;
+* `request_auto_rigging(blocking=True)` — **252.5 s cold, 3.6–5.5 s warm**;
+* `request_texture_sources(blocking=True)` — **11.1 s body + 14.9 s face** cold.
+  Both are CLOUD calls (`LogMetaHumanAuth: User name is …`), so they need an
+  Epic account already signed in; they do not prompt in a commandlet.
+
+Both characters — **INF_Dominic** (male) and **INF_Vivian** (female) — came out
+with `has_high_resolution_textures == True`.
+
+**What is not headless, with the crash rather than a shrug.** Three doors, all
+dying in the same place:
+
+* `build_meta_human` — `EXCEPTION_ACCESS_VIOLATION reading 0x200` in
+  `UnrealEditor-TextureGraph.dll`, from `MetaHumanDefaultEditorPipeline`;
+* `export_geometry` — `Assertion failed: CurrentApplication.IsValid()`,
+  `SlateApplication.h:321`, through AssetTools → ContentBrowser;
+* `export_dcc` — the same `0x200` in `TextureGraph.dll`.
+
+`-AllowCommandletRendering` gets past the first and then **hangs**: 46 s of CPU
+over 14 minutes of wall clock with zero `ShaderCompileWorker` processes alive.
+Killed, not reported as working.
+
+So the script prints the ONE interactive step with the paths filled in — open
+the project, press **Assemble** — and everything after it is scriptable again.
+**The MetaHuman bodies are therefore prepared and not yet exported**, and that
+is the one part of clause 1(a) this wave does not close.
+
+### THE REBIND, APPLIED TO A BODY
+
+The island's hero names three fixed GUIDs, the level that names them is
+committed and byte-locked, and the body a demo wants to show is licensed content
+that may never enter this repository. Exactly the arrangement ASSET0's clause 0
+solved for the road, applied to a mesh: `--rebind-character` writes the imported
+body **at the committed identity**, into the local project only.
+
+**And the demo loop proved it is six assets, not three.** The first frames showed
+the hero running with one arm over its head and its legs splayed. `manny.rs`
+generates a rig whose every bind rotation is the IDENTITY — deliberately, it is
+what lets the inverse bind be a pure translation and keeps the P14 no-trig law —
+and the shipped mannequin's bind carries a real rotation on **137 of its 162
+nodes**. The committed clips write absolute local rotations against the first and
+`sample_clip` seeds every untouched joint from the second. So the rebind now
+moves mesh, rig, skin **and the three clips the hero's machine names**, from the
+rebound body's own pack.
+
+### THE ALBEDO THAT WAS BEING THROWN AWAY
+
+Also found by looking. `T_Manny_01_D` is bound to a parameter literally named
+"Base Texture" and is sRGB — two independent statements that it is a base colour
+— and `export.py`'s name rule `(_d$|_disp|_height) → displacement` sent it to a
+slot this engine does not have, so it was dropped. **The hero was drawing with a
+normal map and no base colour.** `_d$` is now albedo; displacement keeps the
+unambiguous spellings. The four mannequin materials go from
+`maps=ao,displacement,normal,unknown` to `maps=albedo,ao,normal,unknown`.
+
+Still carried: `_MSR_MSK` (metallic/specular/roughness, in that channel order)
+imports as `unknown`. This engine's ORM is occlusion/roughness/metallic, so it
+needs a channel swizzle rather than a rename.
+
+### WHAT THE FRAMES SHOW
+
+`scratchpad/CHAR1a-FINAL/`, against FIX3's `AUDIT-FIX3-FINAL/` as the before.
+
+* **`03-pie-b.png`** — the hero mid-run down Harbour City's main street: a
+  92 178-triangle mannequin, correctly posed, textured, articulated. Luminance
+  over the body (108 x 223 px): **p25 72.2, median 88.2, mean 102.0, p95 205.5**
+  against the gate's floor of 40, with the road beside him at p25 69.2. HERO
+  MOVED **11.816 m**.
+* **`01-editor.png`** — the same character in the EDITOR viewport, drawn in its
+  **bind pose** and **untextured white**. Both are real and both are CHAR1b's:
+  the editor's pose rule falls through to `Pose::rest` when there is no
+  `AnimPlayer` and no sim pose, and ASSET0's carried item 22 (white in the
+  editor, dark in Play) is still open on the material side. Photographed rather
+  than described.
+
+### GATE `char1a_gate.rs` — 8 ARMS, EVERY ONE MUTATION-VERIFIED RED
+
+| arm | the mutation that turns it red |
+|---|---|
+| the 161 names, verbatim and in order | rename the table's `neck_02` row to `neck_2` |
+| a body binds by name; a missing name is named | `shared_names` returns an empty map |
+| every clip resolves on every body | `retarget_clip` keeps the SOURCE joint index |
+| the ladder switches at the crowd tier radii | switch at 50/150 m instead |
+| the generated hand matches the mesh's proportion | put `HAND_OF_HEIGHT` back to 0.105 |
+| every pack states a licence and a ship position | delete ALS's `"ship"` key |
+| nothing from Unreal is inside the checkout | plant `samples/SKM_Manny.inf_mesh` |
+| the committed body is high-poly and skinned | `git checkout HEAD -- Starter_Body.inf_mesh` |
+
+The last row carries a mutation that did **not** work, because that is a fact
+about the arm worth writing down: reverting `BodyOptions` leaves it green,
+correctly, since the arm reads committed BYTES rather than the generator.
+
+The scanner arm is non-vacuous by construction — it asserts it visited more than
+1 800 files (**measured 2 034**; `git ls-files` counts 2 022 tracked) and that
+its own matcher recognises a planted name.
+
+### THE LICENCE POSITIONS, ALL FOUR
+
+The ASSET0 table's Megascans rows move from **unknown** to **Fab Standard
+License — user-confirmed 2026-09-05**: the packs came through Fab, not the old
+Quixel Bridge, which settles them as any-engine, perpetual, royalty-free. The
+two Marketplace packs stay unknown, because the same question does not settle
+them. The three character packs carry three different positions, per pack in the
+manifest and out through `UeImportReport::licences` — Epic's mannequins are
+UE-Only content (local reference), ALS is MIT (may ship, notice preserved),
+MetaHumans are any-engine under the mid-2025 terms (shipped in a cooked pack).
+
+**Cleared to ship is not cleared to commit.** Every one of these permits *use*;
+none permits redistributing the source assets in a public repository.
