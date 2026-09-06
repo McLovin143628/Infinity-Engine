@@ -10,7 +10,8 @@ Read-only with respect to the user's own Unreal project: nothing here opens it.
         -unattended -nop4 -nosplash -stdout -FullStdOutLogOutput -NoShaderCompile
 
     INF_UE_OUT      where the report is written               (required)
-    INF_MH_STAGE    "prepare"|"assemble"|"combine"|"export"   (default "prepare")
+    INF_MH_STAGE    "prepare"|"assemble"|"combine"|"slots"|"export"
+                                                       (default "prepare")
     INF_MH_MALE     the plugin preset to base him on          (default "Dominic")
     INF_MH_FEMALE   the plugin preset to base her on          (default "Vivian")
     INF_MH_WORK     the content path to work under            (default "/Game/INF")
@@ -354,8 +355,92 @@ def combine_one(tag):
         out["bounds_error"] = str(e)
 
     # -- the real materials, by slot name --------------------------------
+    donors, donor_order = _donor_table(name)
+    out["donor_slots"] = [{"mesh": a, "slot": b, "material": c}
+                          for a, b, c in donor_order]
+
+    out["slots_before"] = [{"slot": s, "material": p} for s, p, _ in _slot_table(mesh)]
+    out.update(_write_udim_slots(mesh, donors, path))
+    return out
+
+
+# Which DONOR slot supplies each UDIM tile of the combined mesh, in tile order
+# (index 0 = tile 1001, index 1 = tile 1002).
+#
+# Measured, wave CHAR1a.3 AUDIT: `CreateCombinedFaceAndBodyMesh` keeps the two
+# halves' own texture atlases and packs them as UDIM -- the FACE half's uv lands
+# in tile 1001 and the BODY half's in tile 1002 (34 514 triangles above the neck
+# in 1001, 60 816 below it in 1002, zero triangles straddling a tile, measured on
+# the imported geometry of both characters). The tool then hands the result ONE
+# material slot, because a UE material has one atlas and UE has nothing to say
+# two with. The consequence, photographed before this was written: the head
+# sampled `T_Body_BC` -- a body atlas carrying hands, feet and underwear and NO
+# FACE -- and both MetaHumans stood on the island with blank, featureless heads.
+UDIM_DONOR_SLOTS = ["head_LOD1_shader_shader", "body_shader_shader"]
+
+
+def _write_udim_slots(mesh, donors, path):
+    """**Declare the combined mesh's UDIM atlases as MATERIAL SLOTS, in tile
+    order** (wave CHAR1a.3 audit).
+
+    One slot per UDIM tile, named `udim_1001`, `udim_1002`, ... and bound to the
+    donor material whose atlas that tile IS. The importer measures the tiles off
+    the geometry and splits the mesh into one section per tile, so slot *k* is
+    the material of tile 1001 + *k* and neither end has to guess.
+
+    # Why the slots are written in TILE order and not in UE's
+
+    Because there is no UE order to preserve. The combined mesh has ONE section
+    covering both atlases, so whatever material sits in slot 0 is drawn over the
+    whole body in UE -- the head material or the body material, both equally
+    wrong, because UE cannot draw a two-atlas mesh either. This asset exists only
+    as an export source; the tile order is the only reading under which its slots
+    are true, and it is the reading the bridge and the importer now share.
+
+    A donor slot that does not exist leaves its tile UNBOUND and is reported;
+    nothing is guessed and nothing falls back to slot 0.
+    """
+    out = {}
+    arr = []
+    rows = []
+    for tile, donor_slot in enumerate(UDIM_DONOR_SLOTS):
+        hit = donors.get(donor_slot)
+        mi = hit[1] if hit else None
+        sm = unreal.SkeletalMaterial()
+        sm.set_editor_property("material_interface", mi)
+        sm.set_editor_property("material_slot_name",
+                               unreal.Name("udim_%d" % (1001 + tile)))
+        arr.append(sm)
+        rows.append({"tile": 1001 + tile, "slot": "udim_%d" % (1001 + tile),
+                     "donor_slot": donor_slot,
+                     "material": mi.get_path_name() if mi else None})
+    out["slots_after"] = rows
+    out["udim_slots"] = rows
+    out["clay_left"] = [r["slot"] for r in rows
+                        if r["material"] and "clay" in r["material"].lower()]
+    out["udim_unbound"] = [r["donor_slot"] for r in rows if r["material"] is None]
+    try:
+        mesh.set_editor_property("materials", arr)
+        unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
+    except Exception as e:
+        out["rebind_error"] = str(e)
+        say("REBIND FAILED on %s: %s" % (path, e))
+    return out
+
+
+def _donor_table(name):
+    """`{slot name: (material path, material)}` over the assembled character's
+    own body and face meshes -- UE's own slot names, which is the only place the
+    head material is identified reliably.
+
+    (The glTF crossing cannot do it. UE's exporter writes a mesh's materials
+    DEDUPLICATED and its primitives' `material` indices do not survive a
+    `LODMaterialMap`: measured on the FACE mesh, whose 23 860-triangle head
+    primitive comes out of the exporter referencing the material named
+    `MI_Teeth_Baked`.)
+    """
     donors = {}
-    donor_order = []
+    order = []
     for src in _skeletal_meshes_under("%s/%s" % (BUILD_ROOT, name)):
         m = unreal.load_asset(src)
         if m is None:
@@ -364,37 +449,37 @@ def combine_one(tag):
             if mi is None:
                 continue
             donors.setdefault(slot_name, (mat_path, mi))
-            donor_order.append((src, slot_name, mat_path))
-    out["donor_slots"] = [{"mesh": a, "slot": b, "material": c}
-                          for a, b, c in donor_order]
+            order.append((src, slot_name, mat_path))
+    return donors, order
 
-    slots = _slot_table(mesh)
-    out["slots_before"] = [{"slot": s, "material": p} for s, p, _ in slots]
-    rebound = []
-    arr = []
-    for i, (slot_name, mat_path, mi) in enumerate(slots):
-        hit = donors.get(slot_name)
-        how = "kept"
-        if hit is not None and hit[0] != mat_path:
-            mi = hit[1]
-            how = "by-name"
-        elif hit is not None:
-            how = "already-correct"
-        sm = unreal.SkeletalMaterial()
-        sm.set_editor_property("material_interface", mi)
-        sm.set_editor_property("material_slot_name", unreal.Name(slot_name))
-        arr.append(sm)
-        rebound.append({"index": i, "slot": slot_name, "how": how,
-                        "material": mi.get_path_name() if mi else None})
-    out["slots_after"] = rebound
-    out["clay_left"] = [r["slot"] for r in rebound
-                        if r["material"] and "clay" in r["material"].lower()]
-    try:
-        mesh.set_editor_property("materials", arr)
-        unreal.EditorAssetLibrary.save_loaded_asset(mesh, only_if_is_dirty=False)
-    except Exception as e:
-        out["rebind_error"] = str(e)
-        say("REBIND FAILED on %s: %s" % (path, e))
+
+def slots_one(tag):
+    """**Re-declare an EXISTING combined mesh's UDIM slots** (wave CHAR1a.3
+    audit) -- `combine_one` without `export_geometry`, so it runs in a
+    commandlet.
+
+    `export_geometry` needs a Slate application and the combined assets already
+    exist; re-running it to change a material array would cost a live editor for
+    nothing.
+    """
+    name = "INF_%s" % tag
+    out = {"name": name, "tag": tag, "project_path": COMBINE_ROOT}
+    under = _skeletal_meshes_under(COMBINE_ROOT)
+    mine = [p for p in under if tag.lower() in p.lower()]
+    if not mine:
+        raise RuntimeError("no combined mesh naming %s under %s (found %s)"
+                           % (tag, COMBINE_ROOT, under))
+    path = mine[0]
+    out["combined"] = path
+    mesh = unreal.load_asset(path)
+    if mesh is None:
+        raise RuntimeError("combined mesh %s did not load" % path)
+    donors, order = _donor_table(name)
+    out["donor_slots"] = [{"mesh": a, "slot": b, "material": c}
+                          for a, b, c in order]
+    out["slots_before"] = [{"slot": s, "material": p}
+                           for s, p, _ in _slot_table(mesh)]
+    out.update(_write_udim_slots(mesh, donors, path))
     return out
 
 
@@ -549,6 +634,12 @@ def run():
                 REPORT["characters"].append(rec["result"])
         for tag in (MALE, FEMALE):
             step("probe_materials_%s" % tag, lambda t=tag: probe_materials(t))
+
+    if STAGE in ("slots", "all"):
+        for tag in (MALE, FEMALE):
+            rec = step("slots_%s" % tag, lambda t=tag: slots_one(t))
+            if rec.get("ok"):
+                REPORT["characters"].append(rec["result"])
 
     if STAGE in ("export", "all"):
         step("census_built", lambda: built_bodies())

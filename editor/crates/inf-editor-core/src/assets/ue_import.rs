@@ -685,6 +685,7 @@ pub fn import_manifest(
                 // cooked `.ipack` nor a PIE `ScenePayload` carries a sidecar, and
                 // a face whose eye slots resolved in the editor and not in the
                 // game is the divergence PIE == shipping exists to stop.
+                split_udim_sections(project, id, sk, &mut report);
                 bind_slots(project, id, sk, &mat_ids, &mut report);
                 rungs.push((lod.level, id, tris));
             }
@@ -1233,6 +1234,169 @@ fn record_rungs(project: &mut AssetProject, id: AssetId, mesh: &Mesh, report: &m
     }
 }
 
+/// **SPLIT A UDIM MESH INTO ONE SECTION PER TILE** (wave CHAR1a.3 audit).
+///
+/// # The defect this exists for
+///
+/// UE's `CreateCombinedFaceAndBodyMesh` welds a MetaHuman's face onto its body
+/// and keeps **both halves' texture atlases**, packed as UDIM: the face's uv in
+/// tile 1001 (`u` in `[0,1)`), the body's in tile 1002 (`u` in `[1,2)`). It then
+/// hands the result ONE material slot, because a UE material has one atlas and
+/// UE has nothing to say two with. Imported as it stood, the head sampled the
+/// BODY atlas — a map of hands, feet and underwear with no face on it — and both
+/// committed MetaHumans stood on the island with blank, featureless heads.
+/// Measured on the imported geometry: 34 514 triangles in tile 1001 spanning
+/// y 1.3962…1.7798 m, 60 816 in tile 1002 spanning −0.0016…1.4792 m, and **zero**
+/// triangles straddling a tile.
+///
+/// # The rule
+///
+/// A tile is an atlas and this engine samples one atlas per material, so a tile
+/// is a SECTION. The bridge declares the combined mesh's material slots in TILE
+/// ORDER (`metahuman.py`'s `_write_udim_slots`: slot *k* is the material of tile
+/// 1001 + *k*), and this measures the tiles off the geometry and splits the
+/// submesh accordingly — so neither end guesses which half is which.
+///
+/// Each section's uv is rebased into `[0,1)` by subtracting its tile. The
+/// virtual-texture path wraps (`uv - floor(uv)` in `vt_sample.wgsl`) and would
+/// not need it; every other reader of a `.inf_mesh` uv — a thumbnail, a bake, a
+/// future non-VT sampler — does, and a section whose uv means "this atlas" is
+/// the honest payload.
+///
+/// # What it refuses
+///
+/// Silence, in every case that is not the one above: more than one submesh (the
+/// glTF already told us its sections), a payload that already declares as many
+/// slots as the manifest, a tile count that is not the declared slot count, or a
+/// single triangle straddling two tiles. Each is REPORTED and the mesh is left
+/// exactly as it was.
+fn split_udim_sections(
+    project: &mut AssetProject,
+    mesh: AssetId,
+    sk: &SkeletalMesh,
+    report: &mut UeImportReport,
+) {
+    if sk.material_slots.len() < 2 {
+        return;
+    }
+    let Ok(mut asset) = project.load_payload::<inf_mesh::MeshAsset>(mesh) else {
+        return;
+    };
+    // A glTF with its own primitives has already said where its sections are;
+    // this is only for the mesh that came across as ONE primitive carrying more
+    // than one atlas.
+    if asset.submeshes.len() != 1 {
+        return;
+    }
+    let sub = &asset.submeshes[0];
+    let tile_of = |i: u32| sub.vertices[i as usize].uv[0].floor() as i32;
+    let mut per_tile: BTreeMap<i32, Vec<[u32; 3]>> = BTreeMap::new();
+    let mut straddling = 0usize;
+    for t in sub.indices.chunks_exact(3) {
+        let (a, b, c) = (tile_of(t[0]), tile_of(t[1]), tile_of(t[2]));
+        if a != b || b != c {
+            straddling += 1;
+            continue;
+        }
+        per_tile.entry(a).or_default().push([t[0], t[1], t[2]]);
+    }
+    if per_tile.len() < 2 {
+        return;
+    }
+    if straddling > 0 {
+        report.advisories.push(format!(
+            "{}: {straddling} triangles straddle a uv tile boundary — the mesh is \
+             left unsplit and its {} material slots draw as one",
+            sk.key,
+            sk.material_slots.len()
+        ));
+        return;
+    }
+    if per_tile.len() != sk.material_slots.len() {
+        report.advisories.push(format!(
+            "{}: the uv occupies {} tiles {:?} and the manifest declares {} \
+             material slots — the mesh is left unsplit rather than split into \
+             sections nothing can name",
+            sk.key,
+            per_tile.len(),
+            per_tile.keys().collect::<Vec<_>>(),
+            sk.material_slots.len()
+        ));
+        return;
+    }
+    let src = asset.submeshes[0].clone();
+    let mut out: Vec<inf_mesh::SubMesh> = Vec::with_capacity(per_tile.len());
+    let mut census: Vec<String> = Vec::new();
+    for (slot, (tile, tris)) in per_tile.into_iter().enumerate() {
+        // Only the vertices this tile references, renumbered in first-use order
+        // so the section is a standalone buffer rather than a mask over the old
+        // one.
+        let mut remap: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut vertices: Vec<inf_mesh::MeshVertex> = Vec::new();
+        let mut skin: Vec<inf_mesh::VertexSkin> = Vec::new();
+        let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
+        for t in &tris {
+            for &v in t {
+                let next = remap.len() as u32;
+                let n = *remap.entry(v).or_insert(next);
+                if n as usize == vertices.len() {
+                    let mut mv = src.vertices[v as usize];
+                    mv.uv[0] -= tile as f32;
+                    vertices.push(mv);
+                    if let Some(w) = src.skin.get(v as usize) {
+                        skin.push(*w);
+                    }
+                }
+                indices.push(n);
+            }
+        }
+        census.push(format!(
+            "tile {} → slot {slot}: {} triangles, {} vertices",
+            1001 + tile,
+            tris.len(),
+            vertices.len()
+        ));
+        out.push(inf_mesh::SubMesh {
+            name: format!("udim_{}", 1001 + tile),
+            vertices,
+            indices,
+            material_slot: Some(slot as u32),
+            skin,
+        });
+    }
+    // The payload's slot NAMES become the manifest's own keys, so the table
+    // `bind_slots` writes next is indexable by the index `SubMesh::material_slot`
+    // carries — the two lists are one list now, rather than two orders zipped.
+    asset.material_slots = sk
+        .material_slots
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            k.clone()
+                .unwrap_or_else(|| format!("udim_{}", 1001 + i as i32))
+        })
+        .collect();
+    asset.submeshes = out;
+    let Some(entry) = project.db().get(mesh) else {
+        return;
+    };
+    let path = entry.path.clone();
+    let deps = entry.sidecar.dependencies.clone();
+    let import = entry.sidecar.import.clone();
+    if let Err(e) = project.write_asset_at_with_id(&path, &asset, mesh, deps, import) {
+        report
+            .advisories
+            .push(format!("{}: uv-tile sections not written ({e})", sk.key));
+        return;
+    }
+    report.advisories.push(format!(
+        "{}: the uv occupies {} tiles and the mesh is now one section per tile ({})",
+        sk.key,
+        census.len(),
+        census.join("; ")
+    ));
+}
+
 /// **Bind a skeletal mesh's material slots into its payload** (`.inf_mesh` v3).
 ///
 /// The manifest's `material_slots` are manifest KEYS in slot order and
@@ -1261,14 +1425,43 @@ fn bind_slots(
     };
     let mut bound = 0usize;
     let mut missing: Vec<String> = Vec::new();
-    let pairs: Vec<(u32, AssetId)> = sk
-        .material_slots
-        .iter()
-        .enumerate()
-        .filter_map(|(i, key)| {
-            let Some(key) = key else {
-                missing.push(format!("slot {i} names no material"));
-                return None;
+    // **The index a `SubMesh::material_slot` carries is the glTF's, and the
+    // index the MANIFEST's slot list carries is UE's** — and they are not the
+    // same order (wave CHAR1a.3 audit). UE's exporter writes a mesh's materials
+    // DEDUPLICATED, so a MetaHuman face's twelve UE slots come out as eleven
+    // glTF materials and every slot after the repeat is off by one: measured on
+    // `SKM_INF_Dominic_FaceMesh`, the payload's `MI_Face_Skin_Baked_LOD1` was
+    // bound to `M_Hide` and its `MI_Face_EyelashesHiLODs` to the head skin.
+    //
+    // So the table is built by NAME where the two lists agree about one — a
+    // manifest key ends with the material's own name — and falls back to the
+    // positional zip only where a name is absent or ambiguous, saying so.
+    let by_name = |name: &str| -> Option<&String> {
+        let suffix = format!("_{name}");
+        let mut hits = sk
+            .material_slots
+            .iter()
+            .flatten()
+            .filter(|k| k.as_str() == name || k.ends_with(&suffix));
+        let first = hits.next()?;
+        hits.next().is_none().then_some(first)
+    };
+    let mut positional = 0usize;
+    let pairs: Vec<(u32, AssetId)> = (0..asset.material_slots.len().max(sk.material_slots.len()))
+        .filter_map(|i| {
+            let named = asset.material_slots.get(i).and_then(|n| by_name(n));
+            let key = match named {
+                Some(k) => k,
+                None => {
+                    positional += 1;
+                    match sk.material_slots.get(i).and_then(|k| k.as_ref()) {
+                        Some(k) => k,
+                        None => {
+                            missing.push(format!("slot {i} names no material"));
+                            return None;
+                        }
+                    }
+                }
             };
             match mat_ids.get(key) {
                 Some(id) => {
@@ -1282,6 +1475,12 @@ fn bind_slots(
             }
         })
         .collect();
+    if positional > 0 {
+        missing.push(format!(
+            "{positional} slot(s) matched by POSITION because the payload's slot \
+             name is absent from the manifest's keys or matches more than one"
+        ));
+    }
     // The payload's own slot NAMES have to exist for the table to be indexable
     // by the same index `SubMesh::material_slot` carries; a glTF import writes
     // one per primitive material, so a mesh whose slots the manifest knows and
@@ -1300,7 +1499,17 @@ fn bind_slots(
         return;
     };
     let path = entry.path.clone();
-    let deps = entry.sidecar.dependencies.clone();
+    // **A slot material is a DEPENDENCY of the mesh** (wave CHAR1a.3 audit).
+    // The cook packs a level's dependency closure; a section material reachable
+    // only through the payload's slot table would resolve in the editor, which
+    // reads loose assets, and be absent from the `.ipack` — the exact PIE ==
+    // shipping divergence the table was moved out of the sidecar to avoid.
+    let mut deps = entry.sidecar.dependencies.clone();
+    for id in asset.material_slot_assets.iter().flatten() {
+        if !deps.contains(id) {
+            deps.push(*id);
+        }
+    }
     let import = entry.sidecar.import.clone();
     if let Err(e) = project.write_asset_at_with_id(&path, &asset, mesh, deps, import) {
         report
@@ -1453,7 +1662,17 @@ fn rebind_character(
     let skel_path = root.join(format!("{}.inf_skel", stems.0));
     project.write_asset_at_with_id(&skel_path, &skel, want_skel, vec![], None)?;
     let mesh_path = root.join(format!("{}.inf_mesh", stems.1));
-    project.write_asset_at_with_id(&mesh_path, &body, want_mesh, vec![want_skel], None)?;
+    // The rig, AND every material the body's own slot table names (wave CHAR1a.3
+    // audit): a rebound MetaHuman draws its head from the face atlas and its
+    // body from the body atlas, and a cook that cannot see those edges packs
+    // neither.
+    let mut mesh_deps = vec![want_skel];
+    for id in body.material_slot_assets.iter().flatten() {
+        if !mesh_deps.contains(id) {
+            mesh_deps.push(*id);
+        }
+    }
+    project.write_asset_at_with_id(&mesh_path, &body, want_mesh, mesh_deps, None)?;
     report
         .rebinds
         .push((format!("{}.inf_skel", stems.0), want_skel));
@@ -1461,13 +1680,26 @@ fn rebind_character(
         .rebinds
         .push((format!("{}.inf_mesh", stems.1), want_mesh));
 
-    // The skin. The first material slot, because that is the one the body's
-    // torso uses on both mannequins (measured: `M_torso` on Manny, `Quinn_01`
-    // on Quinn) and this engine's `SkeletalMesh` draw binds ONE material to the
-    // whole body — a per-submesh material on a skinned mesh is CHAR1b's.
+    // The skin an instance wears — the material a reader that draws no sections
+    // puts over the whole body, so it is the mesh's DOMINANT slot rather than
+    // slot 0. On both mannequins that is slot 0 anyway (measured: `M_torso` on
+    // Manny, `Quinn_01` on Quinn), and on a UDIM MetaHuman slot 0 is the FACE
+    // atlas — 34 514 triangles against the body's 60 816 — so taking slot 0
+    // would put a head texture over a whole person the moment a section did not
+    // resolve (wave CHAR1a.3 audit).
+    let dominant = {
+        let mut tris: BTreeMap<u32, usize> = BTreeMap::new();
+        for sub in &body.submeshes {
+            *tris.entry(sub.material_slot.unwrap_or(0)).or_default() += sub.triangle_count();
+        }
+        tris.into_iter()
+            .max_by_key(|(slot, n)| (*n, std::cmp::Reverse(*slot)))
+            .map(|(slot, _)| slot as usize)
+            .unwrap_or(0)
+    };
     if let Some(mat) = sk
         .material_slots
-        .first()
+        .get(dominant)
         .and_then(|s| s.as_ref())
         .and_then(|k| mat_ids.get(k))
     {
