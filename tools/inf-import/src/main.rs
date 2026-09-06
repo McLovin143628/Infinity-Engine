@@ -8,6 +8,8 @@
 //!            [--dest <subfolder>]        under <project>/Content (default "UE")
 //!            [--bind <Stem>=<key>]…      write a material at a committed GUID
 //!            [--no-meshes]               materials and textures only
+//!            [--character-lods <n>]      LOD rungs to store per character (default 3)
+//!            [--retarget-to <objpath>]   the rig every clip is retargeted onto
 //!            [--dry-run]                 read the manifest, write nothing
 //! ```
 //!
@@ -42,7 +44,8 @@ fn print_help() {
          USAGE:\n  \
              inf-import --manifest <manifest.json> --into <project-dir>\n             \
              [--pack <name>]… [--max-texture <n>] [--dest <sub>]\n             \
-             [--bind <Stem>=<material-key>]… [--no-meshes] [--dry-run]\n\n\
+             [--bind <Stem>=<material-key>]… [--no-meshes]\n             \
+             [--character-lods <n>] [--retarget-to <objpath>] [--dry-run]\n\n\
          The manifest is written by tools/ue-export/export.py. A --bind writes\n\
          an imported material at the GUID the committed ground library assigns\n\
          that stem, so a committed level picks it up without naming licensed\n\
@@ -87,6 +90,13 @@ fn run(args: &[String]) -> Result<(), String> {
                 opts.rebinds.push((stem.to_string(), key.to_string()));
             }
             "--no-meshes" => opts.meshes = false,
+            "--character-lods" => {
+                let v = take(&mut i)?;
+                opts.character_lods = v
+                    .parse()
+                    .map_err(|_| format!("--character-lods wants a number, got {v:?}"))?;
+            }
+            "--retarget-to" => opts.retarget_to = Some(take(&mut i)?),
             "--dry-run" => dry = true,
             other => return Err(format!("unknown option {other:?}")),
         }
@@ -132,6 +142,22 @@ fn run(args: &[String]) -> Result<(), String> {
     for (key, id, rungs, tris) in &report.meshes {
         println!("inf-import: mesh     {id}  {tris:>7} tris, {rungs} source rungs  {key}");
     }
+    for (key, mesh, skel, rungs, tris, joints) in &report.skeletal {
+        println!(
+            "inf-import: body     {mesh}  {tris:>7} tris, {rungs} rungs, {joints} joints, \
+             skeleton {}  {key}",
+            skel.map(|s| s.to_string()).unwrap_or_else(|| "NONE".into())
+        );
+    }
+    for (key, id, tracks) in &report.clips {
+        println!("inf-import: clip     {id}  {tracks:>4} tracks  {key}");
+    }
+    for (pack, licence, ship) in &report.licences {
+        println!(
+            "inf-import: LICENCE  {pack} [{}] {licence}",
+            if *ship { "MAY SHIP" } else { "LOCAL ONLY" }
+        );
+    }
     for (stem, id) in &report.rebinds {
         println!("inf-import: REBOUND  {stem} -> {id}");
     }
@@ -148,10 +174,13 @@ fn run(args: &[String]) -> Result<(), String> {
         );
     }
     println!(
-        "inf-import: {} materials, {} textures, {} meshes, {} fixtures, {:.1} MB, {secs:.1} s",
+        "inf-import: {} materials, {} textures, {} meshes, {} bodies, {} clips, \
+         {} fixtures, {:.1} MB, {secs:.1} s",
         report.materials.len(),
         report.textures.len(),
         report.meshes.len(),
+        report.skeletal.len(),
+        report.clips.len(),
         report.fixtures.len(),
         report.bytes as f64 / 1_048_576.0,
     );

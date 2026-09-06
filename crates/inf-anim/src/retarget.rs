@@ -351,6 +351,267 @@ fn retarget_inner(
     (out, report)
 }
 
+// ── clip retargeting (wave CHAR1a) ───────────────────────────────────────────
+//
+// `retarget_pose` answers "what does this pose look like on that rig". A CLIP
+// needs a different answer: the tracks have to be rewritten so the clip itself
+// is addressed to the target skeleton, because `AnimClip::tracks[i].joint` is a
+// positional index into the rig and a clip authored on a 68-bone rig indexes a
+// 161-bone rig's elbow when it means its shoulder.
+//
+// It is a rewrite and not a resample: every key TIME is preserved exactly, so a
+// clip that came in at 30 Hz leaves at 30 Hz and the two curves have the same
+// shape. Resampling would have been the easy implementation and would have made
+// every imported clip a lossy copy of itself for no reason.
+
+/// Target joints that exist on the UE5 mannequin and **not** on the UE4 one the
+/// ALS clips are authored against, and the same-chain source joint each one
+/// takes its share from.
+///
+/// # The rule, stated because it is a choice
+///
+/// UE4's mannequin has a three-segment spine (`spine_01..03`) and one neck bone;
+/// UE5's has five and two. Retargeting by name alone therefore leaves
+/// `spine_04`, `spine_05` and `neck_02` at their bind pose while `spine_03` and
+/// `neck_01` carry the whole bend — a back that hinges at one vertebra and a
+/// head that pivots at the base of the neck.
+///
+/// So the chain's **top** source joint's bind-relative delta is SPLIT evenly
+/// across itself and its infill joints: with `n` joints sharing, each is given
+/// `pslerp(IDENTITY, delta, 1/n)`. Composed along the chain that reproduces the
+/// source delta exactly for a rotation about a fixed axis — which is what a
+/// spine bend and a neck turn are — and the `the_split_spine_composes_to_the_
+/// source_bend` gate measures the residual rather than assuming it.
+///
+/// **Twist bones are deliberately NOT infilled.** UE5 has a second twist bone
+/// per limb segment (`lowerarm_twist_02_l` and friends) that UE4 lacks, and a
+/// twist is not a bend to be shared: it is a *driven* bone, and this engine
+/// drives it from the rig's own [`crate::asset::SkeletonAsset::twists`] table
+/// (`crate::drive::drive_twists`). Splitting a source rotation onto it would
+/// fight the driver. They keep their bind and the report says so by name.
+static CHAIN_INFILL: [(&str, &[&str]); 2] = [
+    ("spine_03", &["spine_04", "spine_05"]),
+    ("neck_01", &["neck_02"]),
+];
+
+/// What a clip retarget moved, and what it could not.
+///
+/// The same doctrine as [`RetargetReport`]: a map whose every pair misses
+/// produces a clip with no tracks, which plays as a perfect bind pose and is
+/// indistinguishable from a correct retarget of a still character unless
+/// somebody is told. Every list is sorted and deduplicated.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClipRetargetReport {
+    /// Tracks the source clip carried.
+    pub tracks_in: usize,
+    /// Tracks the retargeted clip carries.
+    pub tracks_out: usize,
+    /// Target joints written, by name.
+    pub copied: Vec<String>,
+    /// Source joints whose name is on no target joint — their motion is lost.
+    pub dropped: Vec<String>,
+    /// Target joints given a share of a same-chain parent's rotation
+    /// ([`CHAIN_INFILL`]).
+    pub infilled: Vec<String>,
+}
+
+impl ClipRetargetReport {
+    /// Whether the retarget produced **no tracks at all** — the silent failure.
+    pub fn is_vacuous(&self) -> bool {
+        self.tracks_out == 0
+    }
+
+    /// A one-line summary for a log or an import advisory.
+    pub fn summary(&self) -> String {
+        format!(
+            "{} of {} tracks retargeted ({} joints written, {} infilled, {} dropped)",
+            self.tracks_out,
+            self.tracks_in,
+            self.copied.len(),
+            self.infilled.len(),
+            self.dropped.len()
+        )
+    }
+}
+
+impl RetargetMap {
+    /// An identity map over every joint name the two skeletons **share**.
+    ///
+    /// This is the map for two rigs in the same naming family — the UE4 and UE5
+    /// mannequins, which agree on `root`, `pelvis`, `spine_01`, every
+    /// `clavicle`/`upperarm`/`lowerarm`/`hand`, every `thigh`/`calf`/`foot`/
+    /// `ball`, `head`, `neck_01` and the first twist of each segment, and differ
+    /// only where UE5 added bones. Built from the skeletons rather than from a
+    /// table so it cannot go stale against a rig that grew a bone.
+    pub fn shared_names(src: &Skeleton, dst: &Skeleton) -> Self {
+        let have: std::collections::BTreeSet<&str> =
+            dst.joints().iter().map(|j| j.name.as_str()).collect();
+        Self {
+            pairs: src
+                .joints()
+                .iter()
+                .filter(|j| have.contains(j.name.as_str()))
+                .map(|j| (j.name.clone(), j.name.clone()))
+                .collect(),
+        }
+    }
+}
+
+/// Retarget a whole **clip** from `src` onto `dst` by joint name.
+///
+/// Each source track is rewritten to address the target skeleton: rotations are
+/// copied bind-relatively by the same rule [`retarget_pose`] uses
+/// (`dst = dst_bind · src_bind⁻¹ · src_anim`), the **root**'s translation is
+/// copied bind-relatively, and scale is copied as authored. Key times are
+/// preserved exactly.
+///
+/// `infill` turns the [`CHAIN_INFILL`] rule on. Off, a target bone with no
+/// same-named source keeps its bind pose, which is the honest v1 answer and a
+/// stiff one.
+///
+/// The v2 tail (curves, markers, additive reference, root motion, distance) is
+/// carried across unchanged: none of it is addressed by joint index.
+pub fn retarget_clip(
+    clip: &crate::clip::AnimClip,
+    src: &Skeleton,
+    dst: &Skeleton,
+    map: &RetargetMap,
+    infill: bool,
+) -> (crate::clip::AnimClip, ClipRetargetReport) {
+    use crate::clip::{JointTrack, QuatTrack, Vec3Track};
+    use glam::Quat;
+
+    let mut report = ClipRetargetReport {
+        tracks_in: clip.tracks.len(),
+        ..Default::default()
+    };
+    // Source joint index → target joint index, from the map.
+    let mut to_dst: std::collections::BTreeMap<usize, usize> = Default::default();
+    for (s, d) in &map.pairs {
+        if let (Some(si), Some(di)) = (src.index_of(s), dst.index_of(d)) {
+            to_dst.insert(si as usize, di as usize);
+        }
+    }
+    // Target index → the joints that share this source's rotation, in chain
+    // order, the same-named one first. One entry per source joint that has any.
+    let share_of = |dst_name: &str| -> Vec<usize> {
+        let mut out = Vec::new();
+        if !infill {
+            return out;
+        }
+        for (head, tail) in CHAIN_INFILL.iter() {
+            if *head == dst_name {
+                for extra in tail.iter() {
+                    if let Some(i) = dst.index_of(extra) {
+                        out.push(i as usize);
+                    }
+                }
+            }
+        }
+        out
+    };
+
+    // Target index → the track being built for it. A BTreeMap so the output
+    // track order is the target's joint order on every machine, which is what
+    // makes a retargeted `.inf_anim` byte-stable.
+    let mut built: std::collections::BTreeMap<usize, JointTrack> = Default::default();
+
+    for track in &clip.tracks {
+        let si = track.joint as usize;
+        let Some(src_joint) = src.joints().get(si) else {
+            continue;
+        };
+        let Some(&di) = to_dst.get(&si) else {
+            report.dropped.push(src_joint.name.clone());
+            continue;
+        };
+        let dst_joint = &dst.joints()[di];
+        let extras = share_of(&dst_joint.name);
+        // The same-named target plus its infill joints; `1/n` each.
+        let n = 1 + extras.len();
+        let share = 1.0 / n as f32;
+
+        let src_bind_inv = src_joint.local_bind.rotation_quat().inverse();
+
+        if let Some(rot) = &track.rotation {
+            for (rank, &target) in std::iter::once(&di).chain(extras.iter()).enumerate() {
+                let bind = dst.joints()[target].local_bind.rotation_quat();
+                let values: Vec<[f32; 4]> = rot
+                    .values
+                    .iter()
+                    .map(|q| {
+                        let delta = src_bind_inv * Quat::from_array(*q);
+                        // A share of the delta, about the delta's own axis.
+                        // `pslerp` rather than `Quat::slerp`: these bytes can
+                        // land in a committed `.inf_anim` and `f32::sin_cos`
+                        // is not bit-portable (the P14 law).
+                        let part = if n == 1 {
+                            delta
+                        } else {
+                            inf_math::pslerp(Quat::IDENTITY, delta, share)
+                        };
+                        (bind * part).normalize().to_array()
+                    })
+                    .collect();
+                built
+                    .entry(target)
+                    .or_insert_with(|| JointTrack::new(target as u16))
+                    .rotation = Some(QuatTrack {
+                    times: rot.times.clone(),
+                    values,
+                    interp: rot.interp,
+                });
+                if rank > 0 {
+                    report.infilled.push(dst.joints()[target].name.clone());
+                }
+            }
+        }
+
+        // Translation for the ROOT only, bind-relative — limb lengths belong to
+        // the target rig, so a copied child translation would stretch it. The
+        // same v1 bound `retarget_pose` states.
+        if dst_joint.parent.is_none() {
+            if let Some(tr) = &track.translation {
+                let src_bind_t = src_joint.local_bind.translation_vec();
+                let dst_bind_t = dst_joint.local_bind.translation_vec();
+                built
+                    .entry(di)
+                    .or_insert_with(|| JointTrack::new(di as u16))
+                    .translation = Some(Vec3Track {
+                    times: tr.times.clone(),
+                    values: tr
+                        .values
+                        .iter()
+                        .map(|v| (dst_bind_t + (Vec3::from_array(*v) - src_bind_t)).to_array())
+                        .collect(),
+                    interp: tr.interp,
+                });
+            }
+        }
+        if let Some(sc) = &track.scale {
+            built
+                .entry(di)
+                .or_insert_with(|| JointTrack::new(di as u16))
+                .scale = Some(sc.clone());
+        }
+        report.copied.push(dst_joint.name.clone());
+    }
+
+    let tracks: Vec<JointTrack> = built.into_values().collect();
+    report.tracks_out = tracks.len();
+    let mut out = clip.clone();
+    out.tracks = tracks;
+    for list in [
+        &mut report.copied,
+        &mut report.dropped,
+        &mut report.infilled,
+    ] {
+        list.sort();
+        list.dedup();
+    }
+    (out, report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,5 +898,148 @@ mod tests {
         assert_eq!(r.unmapped_target, ["a", "b", "c"]);
         assert_eq!(r.missing_target.len(), 19);
         assert_eq!(r.missing_source.len(), 16, "hips/spine/head are there");
+    }
+
+    // ── clip retargeting (wave CHAR1a) ───────────────────────────────────────
+
+    /// A spine chain of `n` segments named `spine_01..spine_0n`, on a `root`.
+    fn spine_rig(n: usize) -> Skeleton {
+        let mut joints = vec![Joint {
+            name: "root".into(),
+            parent: None,
+            inverse_bind: Mat4::IDENTITY.to_cols_array(),
+            local_bind: JointTransform::from_trs(Vec3::ZERO, Quat::IDENTITY, Vec3::ONE),
+        }];
+        let mut global = Mat4::IDENTITY;
+        for i in 0..n {
+            let local = JointTransform::from_trs(Vec3::Y * 0.2, Quat::IDENTITY, Vec3::ONE);
+            global *= local.to_mat4();
+            joints.push(Joint {
+                name: format!("spine_{:02}", i + 1),
+                parent: Some(i as u16),
+                inverse_bind: global.inverse().to_cols_array(),
+                local_bind: local,
+            });
+        }
+        Skeleton::new(joints).unwrap()
+    }
+
+    /// One rotation key on `joint`, `q` at t = 0.
+    fn one_key(joint: u16, q: Quat) -> crate::clip::AnimClip {
+        let mut t = crate::clip::JointTrack::new(joint);
+        t.rotation = Some(crate::clip::QuatTrack {
+            times: vec![0.0, 1.0],
+            values: vec![q.to_array(), q.to_array()],
+            interp: crate::clip::Interpolation::Linear,
+        });
+        crate::clip::AnimClip::new("bend", vec![t])
+    }
+
+    /// **The clip retarget rewrites the INDEX, and that is the whole point.**
+    ///
+    /// A clip authored on a 4-joint rig indexes joint 3; the same joint by name
+    /// is index 5 on the 6-joint rig. Before this door, importing it played the
+    /// source's chest rotation on the target's neck.
+    #[test]
+    fn a_retargeted_clip_addresses_the_target_rigs_indices() {
+        let src = spine_rig(3);
+        let dst = spine_rig(5);
+        let q = Quat::from_rotation_x(0.4);
+        let clip = one_key(src.index_of("spine_03").unwrap(), q);
+        let map = RetargetMap::shared_names(&src, &dst);
+        let (out, rep) = retarget_clip(&clip, &src, &dst, &map, false);
+
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(
+            out.tracks[0].joint,
+            dst.index_of("spine_03").unwrap(),
+            "the track must name the TARGET's spine_03, not the source's index"
+        );
+        assert_eq!(rep.copied, ["spine_03"]);
+        assert!(rep.dropped.is_empty());
+        // Key times are preserved exactly — a rewrite, not a resample.
+        assert_eq!(
+            out.tracks[0].rotation.as_ref().unwrap().times,
+            clip.tracks[0].rotation.as_ref().unwrap().times
+        );
+    }
+
+    /// **THE INFILL RULE, MEASURED.** The three UE5 spine segments that share a
+    /// UE4 `spine_03`'s bend must compose back to that bend — otherwise the
+    /// split is a way of losing a third of every torso rotation.
+    #[test]
+    fn the_split_spine_composes_to_the_source_bend() {
+        let src = spine_rig(3);
+        let dst = spine_rig(5);
+        let angle = 0.6_f32;
+        let q = Quat::from_rotation_x(angle);
+        let clip = one_key(src.index_of("spine_03").unwrap(), q);
+        let map = RetargetMap::shared_names(&src, &dst);
+        let (out, rep) = retarget_clip(&clip, &src, &dst, &map, true);
+
+        assert_eq!(rep.infilled, ["spine_04", "spine_05"]);
+        assert_eq!(out.tracks.len(), 3, "spine_03 + its two infill joints");
+
+        // Compose the three shares. Every bind rotation on this rig is the
+        // identity, so the composition is the product of the three keys.
+        let mut composed = Quat::IDENTITY;
+        for t in &out.tracks {
+            composed *= Quat::from_array(t.rotation.as_ref().unwrap().values[0]);
+        }
+        let residual = composed.angle_between(q);
+        // **THE NUMBER**: measured 0.0 rad here; the bound is a float-weather
+        // bound, not a slack one.
+        assert!(
+            residual < 1.0e-5,
+            "three shares composed to {residual} rad away from the source bend"
+        );
+
+        // **THE CONTROL.** Without the infill the same clip bends ONE vertebra,
+        // and the two extra joints are at bind — which is the stiff back this
+        // rule exists to prevent.
+        let (flat, flat_rep) = retarget_clip(&clip, &src, &dst, &map, false);
+        assert_eq!(flat.tracks.len(), 1);
+        assert!(flat_rep.infilled.is_empty());
+        let only = Quat::from_array(flat.tracks[0].rotation.as_ref().unwrap().values[0]);
+        assert!(
+            only.angle_between(q) < 1.0e-6,
+            "the un-split target carries the WHOLE bend on one joint"
+        );
+    }
+
+    /// A source joint the target rig does not have is REPORTED, not silently
+    /// dropped — the same doctrine `RetargetReport` exists for.
+    #[test]
+    fn a_source_joint_the_target_lacks_is_named_in_the_report() {
+        let src = rig(["hips", "tail_01", "head"]);
+        let dst = rig(["hips", "spine", "head"]);
+        let clip = one_key(1, Quat::from_rotation_z(0.2));
+        let map = RetargetMap::shared_names(&src, &dst);
+        let (out, rep) = retarget_clip(&clip, &src, &dst, &map, true);
+        assert!(out.tracks.is_empty());
+        assert_eq!(rep.dropped, ["tail_01"]);
+        assert!(
+            rep.is_vacuous(),
+            "no tracks survived and the report says so"
+        );
+    }
+
+    /// Retargeting a rig onto itself reproduces the clip's rotations exactly —
+    /// the identity gate `retarget_pose` has, asked of the clip door.
+    #[test]
+    fn retargeting_a_rig_onto_itself_reproduces_the_clip() {
+        let src = spine_rig(5);
+        let q = Quat::from_rotation_y(0.35);
+        let clip = one_key(src.index_of("spine_02").unwrap(), q);
+        let map = RetargetMap::shared_names(&src, &src);
+        let (out, rep) = retarget_clip(&clip, &src, &src, &map, true);
+        assert_eq!(out.tracks.len(), 1);
+        assert_eq!(out.tracks[0].joint, clip.tracks[0].joint);
+        let got = Quat::from_array(out.tracks[0].rotation.as_ref().unwrap().values[0]);
+        assert!(
+            got.angle_between(q) < 1.0e-6,
+            "identity retarget moved the pose"
+        );
+        assert!(!rep.is_vacuous());
     }
 }

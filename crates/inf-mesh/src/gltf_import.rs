@@ -310,6 +310,46 @@ pub fn import_gltf(path: &Path) -> Result<GltfImport, MeshError> {
                 reader.read_joints(0).map(|j| j.into_u16().collect());
             let weights0: Option<Vec<[f32; 4]>> =
                 reader.read_weights(0).map(|w| w.into_f32().collect());
+            // **The SECOND influence set** (wave CHAR1a). glTF allows any number
+            // of `JOINTS_n`/`WEIGHTS_n` pairs and Unreal's exporter writes two —
+            // EIGHT influences a vertex — for every skeletal mesh measured here
+            // (SKM_Manny and SKM_Quinn, LOD 0 through 2).
+            //
+            // `.inf_mesh`'s `VertexSkin` holds four, and that is not changing in
+            // this wave: widening it moves a `#[repr(C)] Pod` struct that is
+            // uploaded verbatim to a GPU vertex buffer and stored in every
+            // committed `.inf_mesh`, for a fourth and fifth bone whose weight on
+            // this content is small. What DID have to change is what happens to
+            // set 1. Reading set 0 alone keeps *the first four written*, which
+            // the glTF specification does not require to be the heaviest four —
+            // so a vertex whose dominant bone the exporter happened to write
+            // fifth was skinned to the wrong bones and then renormalized to make
+            // the error total 1.0, which hides it perfectly.
+            //
+            // So both sets are read and the four HEAVIEST are kept.
+            //
+            // **Measured on SKM_Manny LOD 0** (48 779 vertices across two
+            // primitives, WEIGHTS as normalized u8):
+            //
+            // * **15 431 vertices (31.63%)** carry a non-zero influence in set
+            //   1 — the eight-bone budget is really used, on about a third of
+            //   the body.
+            // * the weight mass those vertices lose to the four-influence cap is
+            //   **mean 0.0596, median 0.0510, p95 0.1333, max 0.2824** (first
+            //   primitive, 9 561 of 28 678 vertices). `normalized()` divides it
+            //   back out, so the kept bones absorb up to 28% more motion than
+            //   the author gave them at the worst vertex.
+            // * **zero** of the 48 779 set-0 quadruples arrive out of order:
+            //   Unreal writes its influences heaviest-first already. So the sort
+            //   below rescues nothing *on this content* and is a guard rather
+            //   than a fix — the glTF specification does not promise the order,
+            //   and an exporter that does not sort would otherwise skin a
+            //   vertex to its four LIGHTEST bones and renormalize the error to
+            //   1.0, which looks perfectly healthy.
+            let joints1: Option<Vec<[u16; 4]>> =
+                reader.read_joints(1).map(|j| j.into_u16().collect());
+            let weights1: Option<Vec<[f32; 4]>> =
+                reader.read_weights(1).map(|w| w.into_f32().collect());
 
             // ── The import door ─────────────────────────────────────────────
             //
@@ -361,6 +401,12 @@ pub fn import_gltf(path: &Path) -> Result<GltfImport, MeshError> {
             if let Some(j) = joints0.as_ref() {
                 reject_joint_indices(j, skin_joints, &format!("{at} JOINTS_0"))?;
             }
+            if let Some(w) = weights1.as_ref() {
+                reject_non_finite(w, &format!("{at} WEIGHTS_1"))?;
+            }
+            if let Some(j) = joints1.as_ref() {
+                reject_joint_indices(j, skin_joints, &format!("{at} JOINTS_1"))?;
+            }
 
             let normals = normals.unwrap_or_else(|| compute_normals(&positions, &indices));
 
@@ -383,9 +429,30 @@ pub fn import_gltf(path: &Path) -> Result<GltfImport, MeshError> {
             let skin: Vec<VertexSkin> = match (joints0, weights0) {
                 (Some(j), Some(w)) => (0..positions.len())
                     .map(|i| {
+                        let mut pairs: [(u16, f32); 8] = [(0, 0.0); 8];
+                        let a = *j.get(i).unwrap_or(&[0; 4]);
+                        let aw = *w.get(i).unwrap_or(&[1.0, 0.0, 0.0, 0.0]);
+                        for k in 0..4 {
+                            pairs[k] = (a[k], aw[k]);
+                        }
+                        if let (Some(j1), Some(w1)) = (joints1.as_ref(), weights1.as_ref()) {
+                            let b = *j1.get(i).unwrap_or(&[0; 4]);
+                            let bw = *w1.get(i).unwrap_or(&[0.0; 4]);
+                            for k in 0..4 {
+                                pairs[4 + k] = (b[k], bw[k]);
+                            }
+                        }
+                        // Heaviest first. A STABLE sort on the descending
+                        // weight, so two influences of equal weight keep the
+                        // order the exporter wrote them in and the same glTF
+                        // imports to the same bytes on every machine — the
+                        // determinism law, on a path that lands in a pack.
+                        pairs.sort_by(|x, y| {
+                            y.1.partial_cmp(&x.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
                         VertexSkin {
-                            joints: *j.get(i).unwrap_or(&[0; 4]),
-                            weights: *w.get(i).unwrap_or(&[1.0, 0.0, 0.0, 0.0]),
+                            joints: [pairs[0].0, pairs[1].0, pairs[2].0, pairs[3].0],
+                            weights: [pairs[0].1, pairs[1].1, pairs[2].1, pairs[3].1],
                         }
                         .normalized()
                     })

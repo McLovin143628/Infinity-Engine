@@ -180,6 +180,68 @@ PACKS = [
     },
 ]
 
+# ── the CHARACTER packs (wave CHAR1a) ────────────────────────────────────────
+#
+# Skeletal meshes and animation clips, kept in their own list because they carry
+# a different licence position from every surface pack above and because the
+# selectors are exact rather than swept: which mannequin is THE mannequin is a
+# decision, not a sample.
+#
+# **The licence rows here are the ones the manifest carries per asset.** They are
+# not hedged ("unknown") like the surface packs, because for these three the
+# position IS established and it is different for each:
+#
+#   * the UE5 mannequins are Epic's own engine content ("UE-Only Content" in the
+#     EULA) -- usable inside an Unreal Engine project, NOT licensed for shipping
+#     in another engine. So they cross the bridge as a **dev reference and
+#     stand-in**, live under `island-build/project/Content/UE/Mannequins/`, and
+#     are never cooked into a shipped pack and never committed.
+#   * ALS-Community-UE5 is MIT (the plugin's own LICENSE file, "Copyright (c)
+#     2020 Doga Can Yanikoglu & LongmireLocomotion"). MIT permits use in any
+#     engine with the notice preserved -- so these clips MAY ship, and the
+#     notice travels in the manifest row and in the import sidecar.
+#   * MetaHumans are exported by `metahuman.py`, not this file, and carry their
+#     own row.
+#
+# `skeletal` records the SKIN; `clips` records ANIMATION. They are separate
+# because UE separates them: a `USkeletalMesh` and a `UAnimSequence` are two
+# assets sharing a `USkeleton`, and the glTF exporter writes each on its own.
+
+MANNEQUIN_DIR = "/Game/ControlRig/Characters/Mannequins"
+
+CHARACTERS = [
+    {
+        "name": "UE5_Mannequins",
+        "license": "Unreal Engine EULA -- Epic 'UE-Only Content'. Licensed for "
+                   "use in Unreal Engine projects; NOT licensed to ship in "
+                   "another engine. Imported as a DEV REFERENCE and stand-in "
+                   "only: local to island-build, never cooked into a shipped "
+                   "pack, never committed to the engine repository.",
+        "ship": False,
+        "skeletal": [
+            MANNEQUIN_DIR + "/Meshes/SKM_Manny.SKM_Manny",
+            MANNEQUIN_DIR + "/Meshes/SKM_Quinn.SKM_Quinn",
+        ],
+        "clips": [
+            {"prefix": MANNEQUIN_DIR + "/Animations", "limit": 32},
+        ],
+    },
+    {
+        "name": "ALS_Community",
+        "license": "MIT License, Copyright (c) 2020 Doga Can Yanikoglu & "
+                   "LongmireLocomotion (ALS-Community-UE5/LICENSE). Permits use "
+                   "in any engine provided the copyright notice and this "
+                   "permission notice are preserved; the notice travels in this "
+                   "manifest row and in each imported asset's sidecar.",
+        "ship": True,
+        "skeletal": [],
+        "clips": [
+            {"prefix": "/ALSV4_CPP/AdvancedLocomotionV4/CharacterAssets/"
+                       "MannequinSkeleton/AnimationExamples", "limit": 200},
+        ],
+    },
+]
+
 OUT = os.environ.get("INF_UE_OUT", "")
 MODE = os.environ.get("INF_UE_MODE", "export")
 ONLY = [p for p in os.environ.get("INF_UE_PACKS", "").split(",") if p]
@@ -666,6 +728,256 @@ def add_blueprint(bp, pack):
     return rec["key"]
 
 
+# ── skeletal meshes and clips (wave CHAR1a) ──────────────────────────────────
+
+SKELETAL = {}   # object path -> record
+CLIPS = {}      # object path -> record
+
+
+def gltf_facts(dst):
+    """What the written glTF actually contains -- read back, not asserted.
+
+    The joint NAMES are the interchange contract this whole wave rests on (the
+    161 mannequin bone names bind a body to our rig), and the only place they
+    can be read in a commandlet is the file the exporter just wrote:
+    `USkeleton` exposes `bone_tree` to Python as an opaque list whose length is
+    the bone count and whose elements have no name (measured). So the manifest
+    carries what the artifact carries.
+    """
+    out = {"bytes": os.path.getsize(dst) if os.path.isfile(dst) else 0}
+    try:
+        with open(dst, "r", encoding="utf-8") as f:
+            j = json.load(f)
+    except Exception as e:
+        out["read_error"] = str(e)
+        return out
+    nodes = j.get("nodes", [])
+    skins = j.get("skins", [])
+    out["nodes"] = len(nodes)
+    out["skins"] = len(skins)
+    out["animations"] = len(j.get("animations", []))
+    if skins:
+        joints = skins[0].get("joints", [])
+        out["joints"] = len(joints)
+        out["inverse_bind"] = "inverseBindMatrices" in skins[0]
+        out["joint_names"] = [nodes[i].get("name", "") if i < len(nodes) else ""
+                              for i in joints]
+    # TRIANGLES, counted off the accessors -- the number a LOD ladder is
+    # actually about. UE's own `screen_size` is its auto-compute sentinel (-1)
+    # for every rung in this project, so the rung a ladder KEEPS is chosen by
+    # this number and not by the pack's opinion. Measured on SKM_Manny: rungs 0
+    # and 1 are both 92 178 triangles -- the mannequin's LOD1 is a copy of its
+    # LOD0 -- so "the first three rungs" would have stored one of them twice.
+    acc = j.get("accessors", [])
+    tris = 0
+    verts = 0
+    for mesh in j.get("meshes", []):
+        for prim in mesh.get("primitives", []):
+            idx = prim.get("indices")
+            if idx is not None and idx < len(acc):
+                tris += acc[idx].get("count", 0) // 3
+            pos = prim.get("attributes", {}).get("POSITION")
+            if pos is not None and pos < len(acc):
+                verts += acc[pos].get("count", 0)
+    out["triangles"] = tris
+    out["vertices"] = verts
+    prims = (j.get("meshes") or [{}])[0].get("primitives", [])
+    out["primitives"] = len(prims)
+    if prims:
+        attrs = sorted(prims[0].get("attributes", {}).keys())
+        out["attributes"] = attrs
+        # UE writes EIGHT influences per vertex (JOINTS_0+JOINTS_1). Recorded
+        # because the importer keeps four and the loss has to be measurable.
+        out["influence_sets"] = len([a for a in attrs if a.startswith("JOINTS_")])
+    return out
+
+
+def skeletal_export_options(lod):
+    opts = unreal.GLTFExportOptions()
+    opts.set_editor_property("default_level_of_detail", lod)
+    try:
+        opts.set_editor_property("bake_material_inputs",
+                                 unreal.GLTFMaterialBakeMode.DISABLED)
+    except Exception as e:
+        ERRORS.append("bake_material_inputs: %s" % e)
+    # THE THREE THAT MAKE A SKIN A SKIN. `export_vertex_skin_weights` writes
+    # JOINTS_n/WEIGHTS_n and the `skins` array; without it UE writes the bind
+    # pose as a static mesh and the file looks fine and animates never.
+    for prop, val in (("export_vertex_skin_weights", True),
+                      ("export_animation_sequences", True),
+                      ("export_morph_targets", False),
+                      ("make_skinned_meshes_root", False),
+                      ("export_vertex_colors", True),
+                      ("export_lights", False),
+                      ("export_cameras", False)):
+        try:
+            opts.set_editor_property(prop, val)
+        except Exception as e:
+            ERRORS.append("%s: %s" % (prop, e))
+    return opts
+
+
+def skeletal_lod_count(sm):
+    """UE 5.8 exposes no `lod_info` on `USkeletalMesh` to Python (measured:
+    "Failed to find property 'lod_info'"), so this asks the three doors that
+    do answer and records which one did."""
+    for fn in ("get_num_lods",):
+        try:
+            return int(getattr(sm, fn)()), fn
+        except Exception:
+            pass
+    try:
+        return int(unreal.EditorSkeletalMeshLibrary.get_lod_count(sm)), "EditorSkeletalMeshLibrary"
+    except Exception:
+        pass
+    try:
+        return int(sm.get_editor_property("lod_num")), "lod_num"
+    except Exception:
+        pass
+    return 1, "assumed"
+
+
+def add_skeletal_mesh(path, pack):
+    if path in SKELETAL:
+        return SKELETAL[path]["key"]
+    sm = unreal.load_asset(path)
+    if sm is None:
+        ERRORS.append("skeletal mesh not loaded: %s" % path)
+        return None
+    k = key_of(path)
+    nlods, via = skeletal_lod_count(sm)
+    rec = {"key": k, "source": path, "pack": pack, "lods": [],
+           "material_slots": [], "lod_count_via": via}
+    SKELETAL[path] = rec
+    try:
+        sk = sm.get_editor_property("skeleton")
+        rec["skeleton"] = sk.get_path_name() if sk else None
+        rec["bones"] = len(sk.get_editor_property("bone_tree")) if sk else 0
+    except Exception as e:
+        ERRORS.append("skeleton of %s: %s" % (path, e))
+    try:
+        b = sm.get_bounds()
+        rec["bounds_extent_cm"] = [float(b.box_extent.x), float(b.box_extent.y),
+                                   float(b.box_extent.z)]
+    except Exception as e:
+        ERRORS.append("bounds of %s: %s" % (path, e))
+    try:
+        for slot in sm.get_editor_property("materials"):
+            mi = slot.get_editor_property("material_interface")
+            rec["material_slots"].append(
+                add_material(mi, pack) if mi is not None else None)
+    except Exception as e:
+        ERRORS.append("slots on %s: %s" % (path, e))
+    for lod in range(nlods):
+        entry = {"level": lod, "file": None}
+        if MODE == "export":
+            name = rel("skeletal", "%s_LOD%d.gltf" % (k, lod))
+            dst = os.path.join(OUT, name.replace("/", os.sep))
+            ensure(os.path.dirname(dst))
+            try:
+                ok = export_task(sm, dst, None, skeletal_export_options(lod))
+            except Exception as e:
+                ok = False
+                ERRORS.append("gltf %s LOD%d: %s" % (path, lod, e))
+            if ok and os.path.isfile(dst):
+                entry["file"] = name
+                entry.update(gltf_facts(dst))
+            else:
+                ERRORS.append("skeletal gltf %s LOD%d did not write" % (path, lod))
+        rec["lods"].append(entry)
+    say("skel %-40s lods=%d bones=%s slots=%d joints=%s" %
+        (sm.get_name(), nlods, rec.get("bones"), len(rec["material_slots"]),
+         rec["lods"][0].get("joints") if rec["lods"] else "-"))
+    return k
+
+
+def add_clip(pkg, name, pack):
+    path = "%s.%s" % (pkg, name)
+    if path in CLIPS:
+        return CLIPS[path]["key"]
+    seq = unreal.load_asset(path)
+    if seq is None:
+        ERRORS.append("clip not loaded: %s" % path)
+        return None
+    k = key_of(path)
+    rec = {"key": k, "source": path, "pack": pack, "name": name, "file": None}
+    CLIPS[path] = rec
+    try:
+        sk = seq.get_editor_property("skeleton")
+        rec["skeleton"] = sk.get_path_name() if sk else None
+        rec["skeleton_bones"] = len(sk.get_editor_property("bone_tree")) if sk else 0
+    except Exception as e:
+        ERRORS.append("skeleton of %s: %s" % (path, e))
+    for prop, out in (("sequence_length", "seconds"),
+                      ("number_of_sampled_keys", "keys"),
+                      ("rate_scale", "rate_scale")):
+        try:
+            rec[out] = float(seq.get_editor_property(prop))
+        except Exception:
+            pass
+    if MODE == "export":
+        fname = rel("clips", "%s.gltf" % k)
+        dst = os.path.join(OUT, fname.replace("/", os.sep))
+        ensure(os.path.dirname(dst))
+        try:
+            ok = export_task(seq, dst, None, skeletal_export_options(0))
+        except Exception as e:
+            ok = False
+            ERRORS.append("gltf clip %s: %s" % (path, e))
+        if ok and os.path.isfile(dst):
+            rec["file"] = fname
+            rec.update(gltf_facts(dst))
+        else:
+            ERRORS.append("clip gltf %s did not write" % path)
+    return k
+
+
+def run_characters():
+    """The character sweep. Separate from `run`'s pack loop because a character
+    pack names exact assets and a surface pack samples a prefix."""
+    packs = []
+    for pack in CHARACTERS:
+        if ONLY and pack["name"] not in ONLY:
+            continue
+        say("CHARPACK %s" % pack["name"])
+        packs.append({"name": pack["name"], "license": pack["license"],
+                      "ship": pack.get("ship", False), "selectors": []})
+        for path in pack.get("skeletal", []):
+            try:
+                add_skeletal_mesh(path, pack["name"])
+            except Exception as e:
+                ERRORS.append("%s: %s" % (path, e))
+                traceback.print_exc()
+        for sel in pack.get("clips", []):
+            limit = sel.get("limit", 64)
+            pat = sel.get("match")
+            try:
+                REG.scan_paths_synchronous([sel["prefix"]], force_rescan=True)
+            except Exception as e:
+                ERRORS.append("scan %s: %s" % (sel["prefix"], e))
+            hits = []
+            for a in REG.get_assets_by_path(sel["prefix"], recursive=True):
+                if str(a.asset_class_path.asset_name) != "AnimSequence":
+                    continue
+                name = str(a.asset_name)
+                if pat and not re.search(pat, name):
+                    continue
+                hits.append((name, str(a.package_name)))
+            hits.sort()
+            hits = hits[:limit]
+            packs[-1]["selectors"].append({
+                "prefix": sel["prefix"], "match": pat, "limit": limit,
+                "chosen": [h[1] for h in hits],
+            })
+            for name, pkg in hits:
+                try:
+                    add_clip(pkg, name, pack["name"])
+                except Exception as e:
+                    ERRORS.append("%s: %s" % (pkg, e))
+            say("  clips %-24s %d" % (sel["prefix"].split("/")[-1], len(hits)))
+    return packs
+
+
 # ── the sweep ────────────────────────────────────────────────────────────────
 
 def engine_checkout_above(path):
@@ -752,9 +1064,18 @@ def run():
                     say("  ! %s: %s" % (pkg, e))
                     traceback.print_exc()
 
+    packs.extend(run_characters())
+
     t1 = datetime.datetime.now(datetime.timezone.utc)
     manifest = {
-        "schema_version": 1,
+        # **v2 (wave CHAR1a): `skeletal_meshes` and `clips` are new SECTIONS.**
+        # A v1 reader ignores them (every field is `#[serde(default)]` on the
+        # Rust side) but would then report success having imported no character,
+        # so the version is bumped and the importer's guard is what refuses --
+        # the same law the `.ipack` header carries: a newer container is
+        # rejected by name, and a reader that grows an arm keys it on the
+        # version rather than reinterpreting the bytes.
+        "schema_version": 2,
         "generator": "tools/ue-export/export.py",
         "engine": unreal.SystemLibrary.get_engine_version(),
         "project": unreal.Paths.get_project_file_path(),
@@ -766,6 +1087,8 @@ def run():
                  "own frame and the importer converts them",
         "packs": packs,
         "meshes": sorted(MESHES.values(), key=lambda r: r["key"]),
+        "skeletal_meshes": sorted(SKELETAL.values(), key=lambda r: r["key"]),
+        "clips": sorted(CLIPS.values(), key=lambda r: r["key"]),
         "materials": sorted(MATERIALS.values(), key=lambda r: r["key"]),
         "fixtures": sorted(FIXTURES.values(), key=lambda r: r["key"]),
         "textures": sorted(TEXTURES.values(), key=lambda r: r["key"]),
@@ -776,9 +1099,12 @@ def run():
         json.dump(manifest, f, indent=2, sort_keys=True)
     tex_bytes = sum(t.get("bytes", 0) for t in TEXTURES.values())
     say("WROTE %s" % path)
-    say("TOTALS meshes=%d lods=%d materials=%d textures=%d fixtures=%d "
+    say("TOTALS meshes=%d lods=%d skeletal=%d skel_lods=%d clips=%d "
+        "materials=%d textures=%d fixtures=%d "
         "lights=%d texture_MB=%.1f errors=%d seconds=%.1f" % (
             len(MESHES), sum(len(m["lods"]) for m in MESHES.values()),
+            len(SKELETAL), sum(len(m["lods"]) for m in SKELETAL.values()),
+            len(CLIPS),
             len(MATERIALS), len(TEXTURES), len(FIXTURES),
             sum(len(f["lights"]) for f in FIXTURES.values()),
             tex_bytes / 1048576.0, len(ERRORS), (t1 - t0).total_seconds()))

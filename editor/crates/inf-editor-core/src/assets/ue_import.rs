@@ -87,6 +87,20 @@ pub struct UeImportOptions {
     /// Import meshes as well as materials. Meshes are the slow half and a
     /// materials-only run is the common one.
     pub meshes: bool,
+    /// How many LOD rungs of a **character** to store (wave CHAR1a).
+    ///
+    /// Three, and the number is a consequence rather than a taste: a skinned
+    /// mesh never reaches the meshlet path (`MeshAsset::vgeom_streams` drops the
+    /// skin stream), so unlike a rigid mesh a character's ladder has to be
+    /// stored rung by rung, and every stored rung is a whole `.inf_mesh` in the
+    /// pack. Three is what the crowd tiers can actually select between --
+    /// `CrowdTier::{Full, Near, Far}` -- so a fourth would be bytes nothing asks
+    /// for.
+    pub character_lods: usize,
+    /// The `/Game/...` object path of the skeletal mesh whose rig every imported
+    /// **clip** is retargeted onto. `None` uses the first skeleton the run
+    /// imports, which is right when the manifest carries one body.
+    pub retarget_to: Option<String>,
 }
 
 impl Default for UeImportOptions {
@@ -102,6 +116,8 @@ impl Default for UeImportOptions {
             dest: "UE".to_string(),
             rebinds: Vec::new(),
             meshes: true,
+            character_lods: 3,
+            retarget_to: None,
         }
     }
 }
@@ -122,6 +138,17 @@ pub struct UeImportReport {
     pub fixtures: Vec<UeFixture>,
     /// Non-fatal notices, in the P16 cook-advisory shape.
     pub advisories: Vec<String>,
+    /// `(manifest key, mesh asset, skeleton asset, rungs, triangles, joints)`
+    /// per skeletal mesh imported (wave CHAR1a). The skeleton is `None` when the
+    /// glTF carried a mesh with no skin, which is a defect worth seeing rather
+    /// than a shape to tolerate.
+    pub skeletal: Vec<(String, AssetId, Option<AssetId>, usize, usize, usize)>,
+    /// `(manifest key, clip asset, tracks after retarget)` per clip imported.
+    pub clips: Vec<(String, AssetId, usize)>,
+    /// **The per-pack licence positions this import relied on**, carried out of
+    /// the manifest so a caller can write them into its own ledger rather than
+    /// re-deriving them: `(pack, licence text, may-ship)`.
+    pub licences: Vec<(String, String, bool)>,
     /// Bytes of `.inf_tex` + `.inf_mat` + `.inf_mesh` written.
     pub bytes: u64,
 }
@@ -223,6 +250,10 @@ struct Manifest {
     schema_version: u32,
     packs: Vec<Pack>,
     meshes: Vec<Mesh>,
+    /// v2 (wave CHAR1a): skeletal meshes, each with its own LOD ladder.
+    skeletal_meshes: Vec<SkeletalMesh>,
+    /// v2 (wave CHAR1a): animation clips, exported one glTF each.
+    clips: Vec<Clip>,
     materials: Vec<Material>,
     textures: Vec<Texture>,
     fixtures: Vec<Fixture>,
@@ -233,6 +264,56 @@ struct Manifest {
 struct Pack {
     name: String,
     license: String,
+    /// v2: whether this pack's licence permits SHIPPING the content, as opposed
+    /// to using it as a local reference. Recorded per pack because the three
+    /// character packs differ: ALS is MIT (ship), the mannequins are Epic's
+    /// UE-Only content (reference), MetaHumans ship in a cooked pack and are
+    /// never committed.
+    ship: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct SkeletalMesh {
+    key: String,
+    pack: String,
+    source: String,
+    skeleton: Option<String>,
+    bones: u32,
+    lods: Vec<SkelLod>,
+    material_slots: Vec<Option<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct SkelLod {
+    level: u32,
+    file: Option<String>,
+    /// Joints in the exported skin — read off the written glTF, not asserted.
+    joints: u32,
+    joint_names: Vec<String>,
+    /// How many `JOINTS_n` attribute sets the exporter wrote. UE writes **two**
+    /// (eight influences a vertex) and `.inf_mesh`'s `VertexSkin` holds four.
+    influence_sets: u32,
+    /// Triangles in the written glTF, counted off its accessors by the exporter.
+    /// The number a ladder is chosen by — see [`distinct_rungs`].
+    triangles: u32,
+    primitives: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+struct Clip {
+    key: String,
+    pack: String,
+    name: String,
+    source: String,
+    file: Option<String>,
+    skeleton: Option<String>,
+    skeleton_bones: u32,
+    seconds: f32,
+    joints: u32,
+    joint_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -301,7 +382,17 @@ struct FixtureMesh {
 /// The manifest schema this build reads. A newer one is refused by name rather
 /// than half-read: every field here is `default`, so a bump would otherwise
 /// import an empty manifest and report success.
-pub const MANIFEST_SCHEMA_VERSION: u32 = 1;
+/// **v2 (wave CHAR1a)**: `skeletal_meshes` and `clips` joined the manifest.
+///
+/// The bump is not cosmetic. Every field on every manifest record is
+/// `#[serde(default)]` — the deliberate choice at ASSET0, so a manifest that
+/// grows a field does not fail an import that never reads it — and the exact
+/// cost of that choice is that a v1 reader handed a v2 manifest imports the
+/// meshes, ignores the two new **sections** entirely, and reports success
+/// having imported no character at all. So the version gates the container and
+/// a reader that grows an arm keys it on the version, which is the same law
+/// `.ipack`'s header carries.
+pub const MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 /// **Import one manifest.**
 pub fn import_manifest(
@@ -347,9 +438,19 @@ pub fn import_manifest(
     let mut report = UeImportReport::default();
     for p in &m.packs {
         if wanted(&p.name) {
+            report.advisories.push(format!(
+                "pack {}: licence {} [{}]",
+                p.name,
+                p.license,
+                if p.ship {
+                    "MAY SHIP"
+                } else {
+                    "LOCAL REFERENCE ONLY - never cook, never commit"
+                }
+            ));
             report
-                .advisories
-                .push(format!("pack {}: licence {}", p.name, p.license));
+                .licences
+                .push((p.name.clone(), p.license.clone(), p.ship));
         }
     }
 
@@ -425,6 +526,202 @@ pub fn import_manifest(
                 .meshes
                 .push((mesh.key.clone(), id, mesh.lods.len(), tris));
         }
+    }
+
+    // -- 2b. SKELETAL meshes, through the same one door (wave CHAR1a) --------
+    //
+    // Same `import_file` the rigid meshes use -- it has parsed glTF `skins`,
+    // `inverseBindMatrices`, `JOINTS_0`/`WEIGHTS_0` and `animations` since
+    // P11.1, and writes the `.inf_skel` plus the dependency edge from the mesh
+    // onto it. What this loop adds is the LADDER: unlike a rigid mesh (whose
+    // coarser rungs are RECORDED and thrown away, because every rigid draw goes
+    // through a continuous meshlet cut) a **skinned** mesh never reaches the
+    // vgeom path at all -- `MeshAsset::vgeom_streams` drops the skin stream --
+    // so a character that wants a LOD ladder has to have one stored, rung by
+    // rung.
+    let mut skeletons_by_source: BTreeMap<String, (AssetId, inf_anim::SkeletonAsset)> =
+        BTreeMap::new();
+    if opts.meshes {
+        for sk in &m.skeletal_meshes {
+            if !wanted(&sk.pack) {
+                continue;
+            }
+            let mut rungs: Vec<(u32, AssetId, usize)> = Vec::new();
+            let mut skel_id: Option<AssetId> = None;
+            for lod in distinct_rungs(&sk.lods, opts.character_lods) {
+                let Some(file) = lod.file.as_ref() else {
+                    report
+                        .advisories
+                        .push(format!("{}: LOD {} exported no file", sk.key, lod.level));
+                    continue;
+                };
+                let src = base.join(file);
+                if !src.is_file() {
+                    report
+                        .advisories
+                        .push(format!("{}: {} is not on disk", sk.key, src.display()));
+                    continue;
+                }
+                let out = super::import::import_file(project, &src, &dest)?;
+                report.advisories.extend(out.advisories);
+                let Some(id) = out.primary else {
+                    report
+                        .advisories
+                        .push(format!("{}: LOD {} produced no mesh", sk.key, lod.level));
+                    continue;
+                };
+                // The skeleton is whichever product decoded as one. Taken from
+                // LOD 0 only: every rung of one character shares one rig, and
+                // importing rung 1's copy would give the ladder two skeletons
+                // whose joint ORDER agrees only by luck.
+                if lod.level == 0 {
+                    for pid in &out.produced {
+                        if project.db().get(*pid).map(|e| e.kind())
+                            == Some(inf_asset::AssetKind::Skeleton)
+                        {
+                            if let Ok(asset) = project.load_payload::<inf_anim::SkeletonAsset>(*pid)
+                            {
+                                skeletons_by_source.insert(sk.source.clone(), (*pid, asset));
+                            }
+                            skel_id = Some(*pid);
+                            break;
+                        }
+                    }
+                }
+                let tris = project
+                    .load_payload::<inf_mesh::MeshAsset>(id)
+                    .map(|mesh| mesh.triangle_count())
+                    .unwrap_or(0);
+                rungs.push((lod.level, id, tris));
+            }
+            let Some((_, lod0, tris0)) = rungs.first().copied() else {
+                report
+                    .advisories
+                    .push(format!("{}: no rung imported", sk.key));
+                continue;
+            };
+            // **The influence-set notice.** UE writes eight influences a vertex
+            // (`JOINTS_0` + `JOINTS_1`); this engine's `VertexSkin` holds four.
+            // Said once per mesh with the number, because a silently halved
+            // weight set is a body whose shoulders crease and nobody knows why.
+            if let Some(l0) = sk.lods.first() {
+                if l0.influence_sets > 1 {
+                    report.advisories.push(format!(
+                        "{}: the export carries {} influence sets ({} influences a \
+                         vertex); this engine's VertexSkin holds 4, so the import \
+                         keeps the four heaviest per vertex and renormalizes",
+                        sk.key,
+                        l0.influence_sets,
+                        l0.influence_sets * 4
+                    ));
+                }
+            }
+            record_character_ladder(project, lod0, sk, &rungs, &mut report);
+            let joints = skel_id
+                .and_then(|id| project.load_payload::<inf_anim::SkeletonAsset>(id).ok())
+                .map(|s| s.skeleton.len())
+                .unwrap_or(0);
+            report
+                .skeletal
+                .push((sk.key.clone(), lod0, skel_id, rungs.len(), tris0, joints));
+        }
+    }
+
+    // -- 2c. CLIPS, retargeted onto the rig they will be played on ------------
+    //
+    // NOT through `import_file`: a clip glTF carries its own copy of the source
+    // skin, and one hundred and twenty-six ALS clips would have written one
+    // hundred and twenty-six identical `.inf_skel` assets that nothing plays and
+    // whose joint indices differ from the body's. So the glTF is decoded here,
+    // its clip is retargeted BY NAME onto the skeleton the body imported, and
+    // one `.inf_anim` is written with a dependency edge onto that skeleton.
+    for c in &m.clips {
+        if !wanted(&c.pack) {
+            continue;
+        }
+        let Some(file) = c.file.as_ref() else {
+            report
+                .advisories
+                .push(format!("{}: clip exported no file", c.key));
+            continue;
+        };
+        let src = base.join(file);
+        if !src.is_file() {
+            report
+                .advisories
+                .push(format!("{}: {} is not on disk", c.key, src.display()));
+            continue;
+        }
+        let g = match inf_mesh::import_gltf(&src) {
+            Ok(g) => g,
+            Err(e) => {
+                report.advisories.push(format!("{}: {e}", c.key));
+                continue;
+            }
+        };
+        let (Some(imported), Some(src_skel)) = (g.clips.first(), g.skeletons.first()) else {
+            report.advisories.push(format!(
+                "{}: the glTF carries {} clips and {} skins -- a clip needs one of each",
+                c.key,
+                g.clips.len(),
+                g.skeletons.len()
+            ));
+            continue;
+        };
+        // The rig to play it on: the one this manifest imported for this pack's
+        // body, else the first skeleton imported at all. Named rather than
+        // guessed, so a manifest that exported clips and no body says so.
+        let Some((target_id, target)) = opts
+            .retarget_to
+            .as_ref()
+            .and_then(|s| skeletons_by_source.get(s))
+            .or_else(|| skeletons_by_source.values().next())
+            .cloned()
+        else {
+            report.advisories.push(format!(
+                "{}: no skeleton was imported to retarget onto -- export a skeletal \
+                 mesh in the same manifest, or name one with --retarget-to",
+                c.key
+            ));
+            continue;
+        };
+        let map =
+            inf_anim::retarget::RetargetMap::shared_names(&src_skel.skeleton, &target.skeleton);
+        let (payload, rep) = inf_anim::retarget::retarget_clip(
+            &imported.clip,
+            &src_skel.skeleton,
+            &target.skeleton,
+            &map,
+            true,
+        );
+        if rep.is_vacuous() {
+            // The silent failure, named. A clip with no tracks plays as a
+            // perfect bind pose, which on this rig is a T.
+            report.advisories.push(format!(
+                "{}: retarget produced NO tracks ({} source joints, none named on \
+                 the target rig) -- the clip would play as a bind pose",
+                c.key,
+                src_skel.skeleton.len()
+            ));
+            continue;
+        }
+        let asset = inf_anim::AnimClipAsset::new(payload, Some(*target_id.uuid().as_bytes()));
+        let name = format!("{}_{}", c.pack, c.name);
+        let import = super::skeleton_binding::import_table(project, Some(target_id));
+        let id = project.write_asset(
+            &dest,
+            &name,
+            &asset,
+            Some(c.source.clone()),
+            vec![target_id],
+            import,
+        )?;
+        if !rep.dropped.is_empty() {
+            report
+                .advisories
+                .push(format!("{}: {}", c.key, rep.summary()));
+        }
+        report.clips.push((c.key.clone(), id, rep.tracks_out));
     }
 
     // ── 3. fixtures ──────────────────────────────────────────────────────────
@@ -509,6 +806,142 @@ fn record_rungs(project: &mut AssetProject, id: AssetId, mesh: &Mesh, report: &m
             .advisories
             .push(format!("{}: rung census not recorded ({e})", mesh.key));
     }
+}
+
+/// The character LOD ladder, into the LOD-0 mesh's sidecar `import` table.
+///
+/// Unlike [`record_rungs`], which records a census of rungs that were **not**
+/// stored, this records the rungs that **were** -- their asset ids and their
+/// measured triangle counts -- plus the switch distances derived from them.
+///
+/// # Where the switch distances come from
+///
+/// Not from the pack: UE reports its auto-compute sentinel (-1) for every
+/// `screen_size` in this project, measured 18 of 18 at the ASSET0 audit and
+/// again here. So they are derived from the thing that is actually known, which
+/// is each rung's own triangle count against the engine's crowd bands: a rung
+/// takes over where a body's on-screen height makes its triangles cost about
+/// what the next rung's cost at the band above. The bands themselves are
+/// `inf_ecs::crowd`'s, so a character's geometry ladder and its simulation
+/// ladder switch at the same three distances instead of at two unrelated sets
+/// of numbers.
+fn record_character_ladder(
+    project: &mut AssetProject,
+    lod0: AssetId,
+    sk: &SkeletalMesh,
+    rungs: &[(u32, AssetId, usize)],
+    report: &mut UeImportReport,
+) {
+    let Some(entry) = project.db().get(lod0) else {
+        return;
+    };
+    let path = entry.path.clone();
+    let Ok(mut side) = inf_asset::AssetSidecar::load(&path) else {
+        return;
+    };
+    let mut t = side.import.take().unwrap_or_default();
+    t.insert("ue_source".into(), sk.key.clone().into());
+    t.insert("ue_pack".into(), sk.pack.clone().into());
+    t.insert("ue_bones".into(), i64::from(sk.bones).into());
+    t.insert(
+        "ue_lod_rungs_exported".into(),
+        (sk.lods.len() as i64).into(),
+    );
+    t.insert("ue_lod_rungs_stored".into(), (rungs.len() as i64).into());
+    t.insert(
+        "character_lod_assets".into(),
+        toml::Value::Array(
+            rungs
+                .iter()
+                .map(|(_, id, _)| toml::Value::String(id.uuid().to_string()))
+                .collect(),
+        ),
+    );
+    t.insert(
+        "character_lod_triangles".into(),
+        toml::Value::Array(
+            rungs
+                .iter()
+                .map(|(_, _, tris)| toml::Value::Integer(*tris as i64))
+                .collect(),
+        ),
+    );
+    t.insert(
+        "character_lod_switch_m".into(),
+        toml::Value::Array(
+            character_lod_switch_m(rungs.len())
+                .iter()
+                .map(|d| toml::Value::Float(*d))
+                .collect(),
+        ),
+    );
+    side.import = Some(t);
+    if let Err(e) = side.save(&path) {
+        report
+            .advisories
+            .push(format!("{}: ladder not recorded ({e})", sk.key));
+    }
+}
+
+/// The rungs of `lods` worth storing: at most `keep`, each strictly coarser
+/// than the one before.
+///
+/// # Why "the first `keep` rungs" is the wrong rule
+///
+/// **Measured on `SKM_Manny`**: its four exported rungs are 92 178, 92 178,
+/// 26 998 and 12 998 triangles — LOD 1 is a *copy* of LOD 0. Taking the first
+/// three would have stored 92 178 triangles twice, shipped 4.1 MB of duplicate
+/// `.inf_mesh` per body, and given the ladder a switch at 32 m that changes
+/// nothing on screen while costing a mesh swap. Selecting by the triangle count
+/// the exporter measured gives 92 178 / 26 998 / 12 998 — a real 3.4:1 and
+/// 2.1:1 ladder — and the rule is a property of the content rather than of the
+/// pack's LOD-settings asset.
+///
+/// A rung with an unknown (zero) triangle count is kept if it is the first, and
+/// otherwise skipped: an unmeasured rung cannot be shown to be coarser than the
+/// one before it, and a ladder built on a guess is worse than a short one.
+fn distinct_rungs(lods: &[SkelLod], keep: usize) -> Vec<&SkelLod> {
+    let mut out: Vec<&SkelLod> = Vec::new();
+    let mut last = u32::MAX;
+    for lod in lods {
+        if out.len() >= keep {
+            break;
+        }
+        if out.is_empty() {
+            out.push(lod);
+            last = lod.triangles;
+            continue;
+        }
+        if lod.triangles > 0 && lod.triangles < last {
+            out.push(lod);
+            last = lod.triangles;
+        }
+    }
+    out
+}
+
+/// The distances, in metres, at which each stored character rung takes over.
+///
+/// One entry per rung; entry `i` is the distance at which rung `i` starts being
+/// drawn, so entry 0 is always 0. They are `inf_ecs::crowd`'s own tier radii,
+/// which is the point: the geometry a character draws and the simulation it
+/// runs change at the same distance, so a body cannot be posed by the full
+/// animation graph while drawing its cheapest mesh, or the reverse.
+pub fn character_lod_switch_m(rungs: usize) -> Vec<f64> {
+    let bands = [
+        0.0,
+        inf_ecs::crowd::DEFAULT_CROWD_FULL_M,
+        inf_ecs::crowd::DEFAULT_CROWD_NEAR_M,
+        inf_ecs::crowd::DEFAULT_CROWD_FAR_M,
+    ];
+    (0..rungs)
+        .map(|i| {
+            bands
+                .get(i)
+                .copied()
+                .unwrap_or(inf_ecs::crowd::DEFAULT_CROWD_FAR_M)
+        })
+        .collect()
 }
 
 /// Total bytes on disk of everything this run produced.
