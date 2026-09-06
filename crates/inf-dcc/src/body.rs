@@ -1325,9 +1325,20 @@ mod tests {
             "the visibility oracle over {verts} generated vertices: {exact} unreached in f64, \
              {rounded} through an f32 round trip"
         );
+        // **Wave CHAR1a moved these**, deliberately: `BodyOptions::default()`
+        // went from 10/14/5/14/8 to 32/48/10/44/26, so the kernel cage went
+        // from 795 vertices to 2 905. Both readings moved WITH it and both
+        // moved the right way as a fraction of the cage:
+        //
+        //   f64 oracle        35 / 795   = 4.40%   ->  102 / 2 905  = 3.51%
+        //   f32 round trip   349 / 795   = 43.9%   -> 1 103 / 2 905 = 37.97%
+        //
+        // A denser cage buries a smaller share of itself, and the f32 seam
+        // costs a smaller share too. The seam ITSELF is unchanged — it is still
+        // an order of magnitude, which is the thing this arm exists to hold.
         assert_eq!(
             (exact, rounded, verts),
-            (35, 349, 795),
+            (102, 1103, 2905),
             "the f32/f64 oracle seam moved — if that is deliberate, the numbers in \
              `docs/memos/island-progress.md` move with it"
         );

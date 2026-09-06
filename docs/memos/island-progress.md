@@ -34602,8 +34602,11 @@ dropped and named. 124 clips landed.
 `BodyOptions::default()` goes from 10/14/5/14/8 to **32/48/10/44/26**. The
 written mesh: **3 867 vertices / 5 718 triangles**, up from 1 247 / 1 498.
 Generation 2.03 ms; the heat solve over 63 deform bones **2.84 s**. The
-unreached-vertex advisory moves from 35 to 102 — **2.81% of vertices before,
-2.64% after**, so a denser cage buries a slightly smaller share of itself.
+unreached-vertex advisory counts the KERNEL cage the visibility oracle runs
+over, which went from **795 to 2 905** vertices; the unreached count moves from
+**35 to 102** with it — **4.40% of that cage before, 3.51% after**, so a denser
+cage buries a smaller share of itself. The f32 round-trip seam the same arm
+measures moves the same way: 349/795 = 43.9% to 1 103/2 905 = **37.97%**.
 
 **This is not MetaHuman-class and the ceiling is structural**, stated rather
 than left to be discovered: the generator builds the body as tubes whose ring

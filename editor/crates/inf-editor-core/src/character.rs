@@ -2351,13 +2351,19 @@ mod tests {
             "only {} vertices were weighted",
             w.assigned
         );
-        // `unreached` is a **reading**, not a failure: 35 of 795 vertices are
-        // caps buried inside a neighbouring shell, and no ray reaches them. What
+        // `unreached` is a **reading**, not a failure: some vertices are caps
+        // buried inside a neighbouring shell, and no ray reaches them. What
         // matters is that they still carry a real bone, which is what the
         // generator's seed is for — so the claim is asserted on the SKIN STREAM
-        // rather than on the report. Mutation: drop the seed and 35 vertices
-        // land on joint 0, the rig's root, which deforms nothing.
-        assert!(w.unreached < 60, "{} unreached", w.unreached);
+        // rather than on the report. Mutation: drop the seed and they land on
+        // joint 0, the rig's root, which deforms nothing.
+        //
+        // **Wave CHAR1a**: 35 of a 795-vertex cage became **102 of 2 905** when
+        // the body's tessellation was raised — 4.40% to 3.51%, so the ceiling
+        // moves with the cage rather than with the count. 150 is 5.2% of this
+        // cage: room for a generator change, far below a seed that stopped
+        // working (which is 100%).
+        assert!(w.unreached < 150, "{} unreached", w.unreached);
         let rig = inf_anim::build_template(BodyPlan::Biped, &BodyParams::default()).unwrap();
         let roles = rig.role_index();
         let body = load_mesh(&p, out.mesh).expect("the body loads");

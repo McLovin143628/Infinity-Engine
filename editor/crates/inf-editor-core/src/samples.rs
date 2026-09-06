@@ -12262,12 +12262,13 @@ mod tests {
         // only be bought by silencing this one.
         //
         // **Wave CHAR1a moved the number**, because it raised the body's
-        // tessellation: the written mesh went from 1 247 vertices / 1 498
-        // triangles to **3 867 / 5 718**, and the unreached count from 35 to
-        // **102**. Measured against the mesh the wizard writes, that is 2.81%
-        // of vertices before and 2.64% after -- a denser cage buries a slightly
-        // SMALLER share of itself, which is the claim worth pinning and the
-        // reason the number below is spelled out rather than made a wildcard.
+        // tessellation. The written mesh went from 1 247 vertices / 1 498
+        // triangles to **3 867 / 5 718**; the advisory counts the KERNEL cage
+        // the visibility oracle runs over, which went from **795 to 2 905**,
+        // and the unreached count with it from **35 to 102** -- 4.40% of that
+        // cage before, **3.51%** after. A denser cage buries a smaller share of
+        // itself, which is the claim worth pinning and the reason the number
+        // below is spelled out rather than made a wildcard.
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].starts_with("102 of the generated body's vertices"),
