@@ -120,15 +120,23 @@ arrangement, and `docs/memos/island-progress.md`'s ASSET0 ledger for the licence
 table.
 
 > **Before you run it, the licence position, in one paragraph.** There is no
-> licence file anywhere under the reference project's `Content`, so every pack
-> the bridge touches is recorded as **unknown**. Megascans content bundled with
-> Unreal is licensed for use *in Unreal Engine projects*; that it may be
-> converted and **shipped in a game built on another engine is not
-> established**, and the same is true of the Marketplace/Fab packs. So what
-> comes across the bridge is safe to look at on your own machine and is **not
-> cleared to ship** — check each pack's Fab page before it goes anywhere. Both
-> ends of the bridge refuse a destination inside this checkout outright, and
-> `ue-staging/` is in `.gitignore`, because this repository is public.
+> licence file anywhere under the reference project's `Content`, so the position
+> is per pack rather than per project. The **Megascans surfaces** came through
+> **Fab** (user-confirmed 2026-09-05), which means Fab's **Standard License** —
+> any engine, perpetual, royalty-free — so they are **cleared to ship**. The two
+> Marketplace/Fab packs (`Downtown_West`, `AdvancedRealisticGlass`) are still
+> **unknown**: check their listings before they go anywhere. The **UE5
+> mannequins** are Epic's own *UE-Only Content* and are a **local dev reference
+> only** — never cooked, never shipped. The **ALS** clips are **MIT** and may
+> ship with the notice preserved. **MetaHumans** are licensed for any engine
+> under the mid-2025 terms and ship inside the cooked pack.
+>
+> **Cleared to ship is not cleared to commit.** Every one of these licences
+> permits *use*; none permits redistributing the source assets in a public
+> repository. So nothing the bridge writes is ever committed: both ends refuse a
+> destination inside this checkout outright, `ue-staging/` is in `.gitignore`,
+> and `char1a_gate::nothing_from_unreal_is_inside_the_checkout` walks the tree
+> looking for one that slipped past both doors.
 
 **The order matters and there is only one that works:**
 

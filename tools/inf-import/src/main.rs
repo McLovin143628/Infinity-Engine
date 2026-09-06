@@ -10,6 +10,7 @@
 //!            [--no-meshes]               materials and textures only
 //!            [--character-lods <n>]      LOD rungs to store per character (default 3)
 //!            [--retarget-to <objpath>]   the rig every clip is retargeted onto
+//!            [--rebind-character <key>]  write that body at the starter GUIDs
 //!            [--dry-run]                 read the manifest, write nothing
 //! ```
 //!
@@ -97,6 +98,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     .map_err(|_| format!("--character-lods wants a number, got {v:?}"))?;
             }
             "--retarget-to" => opts.retarget_to = Some(take(&mut i)?),
+            "--rebind-character" => opts.rebind_character = Some(take(&mut i)?),
             "--dry-run" => dry = true,
             other => return Err(format!("unknown option {other:?}")),
         }

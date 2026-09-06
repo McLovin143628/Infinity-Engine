@@ -75,11 +75,11 @@ pub struct BodyOptions {
 impl Default for BodyOptions {
     fn default() -> Self {
         Self {
-            limb_segments: 10,
-            torso_segments: 14,
-            finger_segments: 5,
-            head_segments: 14,
-            head_rings: 8,
+            limb_segments: 32,
+            torso_segments: 48,
+            finger_segments: 10,
+            head_segments: 44,
+            head_rings: 26,
         }
     }
 }

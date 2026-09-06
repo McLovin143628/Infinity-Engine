@@ -31346,19 +31346,37 @@ stay synthesised. That is stated rather than papered over with a moss.
 #### THE LICENCE TABLE
 
 There is **no licence file anywhere** under the Unreal project's `Content`. Every
-row below is what is known, and "unknown" where nothing is.
+row below was originally what is known, with "unknown" where nothing was — and
+**wave CHAR1a corrected the Megascans rows**, because the thing that was missing
+was not a document but a question nobody had asked the author. Asked on
+2026-09-05, the answer was that the packs came through **Fab**, not the old
+Quixel Bridge, which settles them: Fab's Standard License is any-engine,
+perpetual and royalty-free. The two Marketplace/Fab packs stay unknown because
+the same question does not settle them — they are third-party listings with
+their own terms, and nobody has read them.
 
 | pack | what crossed | licence, as recorded |
 |---|---|---|
-| `MS_AsphaltEss` | 3 surface materials, 12 maps | **unknown** — Quixel/Megascans via Fab. Megascans content bundled with Unreal is licensed for use IN Unreal Engine projects; conversion for shipping elsewhere is **not established**. Verify on the Fab page before shipping. |
-| `MS_CityCurbs` | 2 meshes (4 rungs each), **2** materials | unknown — as above. *(Audit: the count was 1. The second is `/Engine/EngineMaterials/WorldGridMaterial`, a slot the pack leaves on the engine default — engine content, not Quixel's, and recorded under this pack's licence because the export attributes a material to the pack that references it.)* |
-| `MS_BrickV1` | 2 surface materials | unknown — as above |
-| `MS_ConcreteV1` | 2 surface materials | unknown — as above |
-| `MS_CementV1` | 2 surface materials | unknown — as above |
-| `MS_MountainSl` | 2 rock surfaces | unknown — as above |
-| `MS_MossEss` | 2 moss surfaces | unknown — as above |
-| `Downtown_West` | 10 meshes, **13** materials *(audit: the count was 12)*, 2 light fixtures | **unknown** — Marketplace/Fab pack in this project. Verify on its Fab page before shipping. |
+| `MS_AsphaltEss` | 3 surface materials, 12 maps | **Fab Standard License** — user-confirmed 2026-09-05 (wave CHAR1a): the packs came through Fab, not the old Quixel Bridge, so they carry Fab's Standard License — any engine, perpetual, royalty-free. **Cleared to ship.** Still never committed: the licence permits use, not redistribution of the source assets in a public repository. |
+| `MS_CityCurbs` | 2 meshes (4 rungs each), **2** materials | Fab Standard License — user-confirmed 2026-09-05, as above. *(Audit: the count was 1. The second is `/Engine/EngineMaterials/WorldGridMaterial`, a slot the pack leaves on the engine default — engine content, not Quixel's, and recorded under this pack's licence because the export attributes a material to the pack that references it.)* |
+| `MS_BrickV1` | 2 surface materials | Fab Standard License — user-confirmed 2026-09-05 |
+| `MS_ConcreteV1` | 2 surface materials | Fab Standard License — user-confirmed 2026-09-05 |
+| `MS_CementV1` | 2 surface materials | Fab Standard License — user-confirmed 2026-09-05 |
+| `MS_MountainSl` | 2 rock surfaces | Fab Standard License — user-confirmed 2026-09-05 |
+| `MS_MossEss` | 2 moss surfaces | Fab Standard License — user-confirmed 2026-09-05 |
+| `Downtown_West` | 10 meshes, **13** materials *(audit: the count was 12)*, 2 light fixtures | **unknown** — Marketplace/Fab pack in this project, with its own listing terms. Verify on its Fab page before shipping. |
 | `AdvancedRealisticGlass` | 2 materials, parameters only | **unknown** — as above |
+
+**The character packs (wave CHAR1a).** Three sources, three different positions,
+and the difference is why the wave is arranged the way it is. Each row is
+carried per pack in the manifest and surfaced by `UeImportReport::licences`, so
+the position travels with the bytes instead of living only here.
+
+| pack | what crossed | licence, as recorded | position |
+|---|---|---|---|
+| `UE5_Mannequins` | `SKM_Manny` + `SKM_Quinn`, 3 LOD rungs each (92 178 / 26 998 / 12 998 tris), 161 bones, 4 materials, 8 maps, 10 clips | **Unreal Engine EULA — Epic "UE-Only Content."** Licensed for use in Unreal Engine projects; NOT licensed to ship in another engine. | **LOCAL REFERENCE ONLY.** Dev stand-in under `island-build/project/Content/UE/Mannequins/`. Never cooked into a shipped pack, never committed. |
+| `ALS_Community` | 114 animation clips, retargeted onto the 161-bone rig | **MIT License, Copyright (c) 2020 Doğa Can Yanıkoğlu & LongmireLocomotion** (`ALS-Community-UE5/LICENSE`). Any engine, notice preserved. | **MAY SHIP.** The notice travels in the manifest row and in each imported asset's sidecar. |
+| MetaHumans (`INF_Dominic`, `INF_Vivian`) | created in UE 5.8 from the plugin's shipped presets, auto-rigged, 2K face + body textures | **MetaHuman Content licence, mid-2025 terms** — usable in ANY engine (Epic's 2025-06 licence change; free below US$1M annual revenue). Terms relied on: `unrealengine.com/en-US/eula/metahuman`, retrieved 2026-09-05. | **SHIPPED in the cooked `.ipack`; NEVER committed** — use is not redistribution. |
 
 **Nothing in this table is in this repository.** The exports live in a staging
 directory and the imports in the island's build project, both outside the tree;

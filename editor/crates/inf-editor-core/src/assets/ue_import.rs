@@ -101,6 +101,27 @@ pub struct UeImportOptions {
     /// **clip** is retargeted onto. `None` uses the first skeleton the run
     /// imports, which is right when the manifest carries one body.
     pub retarget_to: Option<String>,
+    /// The manifest key of the skeletal mesh to write **at the starter
+    /// character's committed GUIDs** — the REBIND, for a body.
+    ///
+    /// # Why a body needs the same door a road surface needed
+    ///
+    /// The island's hero entity names three fixed GUIDs (`0x5C10_00A0 + 0/1/2`
+    /// — the starter rig, its skin material and its body mesh), the level that
+    /// names them is committed and byte-locked, and the body a demo wants to
+    /// show is licensed content that may never enter this repository. Exactly
+    /// the arrangement clause 0 of ASSET0 solved for the road: write the
+    /// imported asset **at the committed identity**, into the local project
+    /// only. `samples/starter-character/Starter_Body.inf_mesh` (our own,
+    /// committed, licence-free) and `Content/UE/.../Starter_Body.inf_mesh`
+    /// (Unreal's mannequin, local, never committed) become the same asset
+    /// identity with different vertices, and the island level does not know or
+    /// care which one it got.
+    ///
+    /// Three assets move together or none do, because a mesh whose joint
+    /// indices address one rig cannot be posed by another: the LOD-0 mesh, the
+    /// skeleton it was skinned to, and the material in its first slot.
+    pub rebind_character: Option<String>,
 }
 
 impl Default for UeImportOptions {
@@ -118,6 +139,7 @@ impl Default for UeImportOptions {
             meshes: true,
             character_lods: 3,
             retarget_to: None,
+            rebind_character: None,
         }
     }
 }
@@ -621,6 +643,9 @@ pub fn import_manifest(
                 .and_then(|id| project.load_payload::<inf_anim::SkeletonAsset>(id).ok())
                 .map(|s| s.skeleton.len())
                 .unwrap_or(0);
+            if opts.rebind_character.as_deref() == Some(sk.key.as_str()) {
+                rebind_character(project, lod0, skel_id, sk, &mat_ids, &mut report)?;
+            }
             report
                 .skeletal
                 .push((sk.key.clone(), lod0, skel_id, rungs.len(), tris0, joints));
@@ -881,6 +906,84 @@ fn record_character_ladder(
             .advisories
             .push(format!("{}: ladder not recorded ({e})", sk.key));
     }
+}
+
+/// **Write an imported body at the starter character's committed GUIDs.**
+///
+/// See [`UeImportOptions::rebind_character`] for why. The three assets are
+/// copied rather than moved: the originals keep their own ids and stay in the
+/// drawer, so an author can see both, and the rebind is a second file with a
+/// borrowed identity exactly as the material rebind is.
+///
+/// A body whose skeleton did not import is REFUSED rather than half-rebound: a
+/// mesh at the hero's mesh GUID with the old rig still at the hero's skeleton
+/// GUID is 92 000 triangles addressed to the wrong joints, which draws as an
+/// explosion and is worse than the low-poly body it replaced.
+fn rebind_character(
+    project: &mut AssetProject,
+    mesh: AssetId,
+    skeleton: Option<AssetId>,
+    sk: &SkeletalMesh,
+    mat_ids: &BTreeMap<String, AssetId>,
+    report: &mut UeImportReport,
+) -> Result<()> {
+    let ids = crate::samples::starter_character_ids();
+    let (Some(want_mesh), Some(want_skel), Some(want_mat)) = (ids.mesh, ids.skeleton, ids.material)
+    else {
+        return Ok(());
+    };
+    let Some(skeleton) = skeleton else {
+        return Err(AssetError::Import(format!(
+            "{}: refusing to rebind a body whose skeleton did not import — the \
+             mesh's joint indices would address the rig it replaced",
+            sk.key
+        )));
+    };
+    let skel: inf_anim::SkeletonAsset = project.load_payload(skeleton)?;
+    let body: inf_mesh::MeshAsset = project.load_payload(mesh)?;
+    let root = project.root().to_path_buf();
+
+    let skel_path = root.join("Starter.inf_skel");
+    project.write_asset_at_with_id(&skel_path, &skel, want_skel, vec![], None)?;
+    let mesh_path = root.join("Starter_Body.inf_mesh");
+    project.write_asset_at_with_id(&mesh_path, &body, want_mesh, vec![want_skel], None)?;
+    report.rebinds.push(("Starter.inf_skel".into(), want_skel));
+    report
+        .rebinds
+        .push(("Starter_Body.inf_mesh".into(), want_mesh));
+
+    // The skin. The first material slot, because that is the one the body's
+    // torso uses on both mannequins (measured: `M_torso` on Manny, `Quinn_01`
+    // on Quinn) and this engine's `SkeletalMesh` draw binds ONE material to the
+    // whole body — a per-submesh material on a skinned mesh is CHAR1b's.
+    if let Some(mat) = sk
+        .material_slots
+        .first()
+        .and_then(|s| s.as_ref())
+        .and_then(|k| mat_ids.get(k))
+    {
+        let payload: MaterialAsset = project.load_payload(*mat)?;
+        let deps = payload.texture_dependencies();
+        let path = root.join("Starter_Skin.inf_mat");
+        project.write_asset_at_with_id(&path, &payload, want_mat, deps, None)?;
+        report
+            .rebinds
+            .push(("Starter_Skin.inf_mat".into(), want_mat));
+    } else {
+        report.advisories.push(format!(
+            "{}: rebound the body and its rig, but slot 0 named no imported \
+             material — the hero keeps the starter's neutral skin",
+            sk.key
+        ));
+    }
+    report.advisories.push(format!(
+        "{}: REBOUND at the starter character's GUIDs — this project's hero is \
+         now that body ({} triangles, {} joints). Local only.",
+        sk.key,
+        body.triangle_count(),
+        skel.skeleton.len()
+    ));
+    Ok(())
 }
 
 /// The rungs of `lods` worth storing: at most `keep`, each strictly coarser

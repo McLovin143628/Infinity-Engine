@@ -12253,16 +12253,24 @@ mod tests {
         let (a, warnings) = starter_character_files().expect("the starter character builds");
         let (b, _) = starter_character_files().expect("the starter character builds twice");
         // **The advisory list, pinned by content.** Exactly one, and it is
-        // SK1b's carried bound rather than something new: 35 of the generated
-        // body's 795 kernel vertices are caps buried inside a neighbouring
-        // shell, so the visibility oracle cannot reach them and they keep the
-        // bone the generator seeded them with -- which is right. Pinned by
-        // CONTENT and not by count, because a count of one says nothing about
-        // which one, and asserted rather than allowed-to-be-empty, because "no
-        // warnings" could only be bought by silencing this one.
+        // SK1b's carried bound rather than something new: some of the generated
+        // body's kernel vertices are caps buried inside a neighbouring shell, so
+        // the visibility oracle cannot reach them and they keep the bone the
+        // generator seeded them with -- which is right. Pinned by CONTENT and
+        // not by count, because a count of one says nothing about which one, and
+        // asserted rather than allowed-to-be-empty, because "no warnings" could
+        // only be bought by silencing this one.
+        //
+        // **Wave CHAR1a moved the number**, because it raised the body's
+        // tessellation: the written mesh went from 1 247 vertices / 1 498
+        // triangles to **3 867 / 5 718**, and the unreached count from 35 to
+        // **102**. Measured against the mesh the wizard writes, that is 2.81%
+        // of vertices before and 2.64% after -- a denser cage buries a slightly
+        // SMALLER share of itself, which is the claim worth pinning and the
+        // reason the number below is spelled out rather than made a wildcard.
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].starts_with("35 of the generated body's vertices"),
+            warnings[0].starts_with("102 of the generated body's vertices"),
             "the starter character's advisory changed: {warnings:?}"
         );
         assert_eq!(

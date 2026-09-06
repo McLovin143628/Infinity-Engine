@@ -119,11 +119,26 @@ const SHOULDER_OF_SPAN: f32 = 0.35;
 /// Hand length — wrist to the tip of the middle finger — as a fraction of height.
 /// The whole finger table below is expressed in units of this.
 ///
-/// This engine's own number, not the reference rig's: the shipped mannequin's
-/// middle-finger chain is 17.1 cm on a rig ~178 cm tall, which is **0.096**. The
-/// *proportions inside* the hand are measured; its overall size is authored, so
-/// changing this scales every finger together and breaks nothing.
-const HAND_OF_HEIGHT: f64 = 0.105;
+/// **MEASURED, since wave CHAR1a.** SK1a authored 0.105 and said so, because the
+/// only number it had was read off a `.uasset` and estimated against a rig
+/// "~178 cm tall" — it recorded 0.096 as the reference's value and shipped a
+/// bigger hand anyway. The bridge now exports `SKM_Manny` as glTF, so both
+/// halves of that ratio are measurable on the shipped asset instead of
+/// estimated:
+///
+/// * the middle-finger chain (`middle_metacarpal_l` + `_01` + `_02` + `_03`,
+///   summed as the magnitudes of their local bind translations, which are
+///   rotation-independent) is **0.1720 m**;
+/// * the mesh's own vertex bounds are **1.8054 m** tall (`SKM_Quinn`: 0.1720 m
+///   on 1.8017 m).
+///
+/// 0.1720 / 1.8054 = **0.0953**, and that is what this constant now is. The old
+/// value made every rig this engine generates 10% big in the hand — visible the
+/// moment a character holds a weapon, which is why the grip catalogue's
+/// affordances were being authored against a hand that did not match the mesh
+/// they would be shown on. The *proportions inside* the hand were measured at
+/// SK1a and are unchanged; this is only the scale they are expressed in.
+const HAND_OF_HEIGHT: f64 = 0.0953;
 /// How far forward of the ankle the ball of the foot sits, as a fraction of height.
 const BALL_OF_HEIGHT: f64 = 0.085;
 /// A knee's flexion range, degrees.
