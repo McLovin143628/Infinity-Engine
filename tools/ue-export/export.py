@@ -1155,29 +1155,38 @@ def add_clip(pkg, name, pack):
         # it, so the property is restored and nothing is saved. (`run()` also
         # turns the editor's autosave off for the session, so an unrelated timer
         # cannot write the change out.)
-        restore = None
         chosen = None
         if rec.get("skeleton"):
             pick = richest_compatible_mesh(rec["skeleton"])
             if pick is not None:
                 chosen = pick
+                # `PreviewSkeletalMesh` is a PRIVATE `UPROPERTY` on both
+                # `UAnimationAsset` and `USkeleton` (measured: `set_editor_property`
+                # answers "Failed to find property 'preview_skeletal_mesh'"), and
+                # the only door to it is the editor-only UFUNCTION
+                # `SetPreviewSkeletalMesh`.
                 try:
-                    restore = seq.get_editor_property("preview_skeletal_mesh")
-                    seq.set_editor_property("preview_skeletal_mesh", pick[1])
+                    seq.set_preview_skeletal_mesh(pick[1])
                     rec["preview_mesh"] = pick[0]
                     rec["preview_mesh_bones"] = bone_count_of_mesh(pick[1])
                 except Exception as e:
                     rec["preview_mesh_error"] = str(e)
-                    restore = None
+                    chosen = None
         try:
             ok = export_task(seq, dst, None, skeletal_export_options(0))
         except Exception as e:
             ok = False
             ERRORS.append("gltf clip %s: %s" % (path, e))
         finally:
-            if restore is not None or chosen is not None:
+            # Put it back. `GetPreviewMesh` is not a UFUNCTION, so the previous
+            # value cannot be READ from Python and the restore is to `None` --
+            # which is what 124 of these 164 sequences carried, since the
+            # exporter reached `FindCompatibleMesh` for them at all. Nothing is
+            # saved either way: this runs as a commandlet whose process exits,
+            # and `run()` turns the editor's autosave off.
+            if chosen is not None:
                 try:
-                    seq.set_editor_property("preview_skeletal_mesh", restore)
+                    seq.set_preview_skeletal_mesh(None)
                 except Exception:
                     pass
         if ok and os.path.isfile(dst):
