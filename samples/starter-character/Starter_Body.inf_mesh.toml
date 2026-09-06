@@ -1,7 +1,7 @@
 schema_version = 1
 guid = "00000000-0000-0000-0000-00005c1000a2"
 kind = "mesh"
-content_hash = "3386171afe282977baaf375441c97d97"
+content_hash = "e8b51ab764319f3f6fa044b32c6f096d"
 dependencies = [
     "00000000-0000-0000-0000-00005c1000a0",
     "00000000-0000-0000-0000-00005c1000a1",

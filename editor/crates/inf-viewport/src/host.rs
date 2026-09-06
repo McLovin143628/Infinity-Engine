@@ -8299,32 +8299,6 @@ fn crowd_shadow(agent: Option<inf_ecs::crowd::CrowdAgent>) -> inf_render::Skinne
     }
 }
 
-/// **A simulated garment, as a skinned draw** (P24.4).
-///
-/// The sim's `inf_ecs::cloth` store already holds this wearer's particle
-/// positions *and* the garment's triangle list, so a projector needs no asset
-/// store and no mesh lookup at all: it reads the sim world, the way it reads an
-/// evaluated pose, and builds the vertex stream through the one Ring-0 function
-/// `inf_render::deformed_skinned_mesh`.
-///
-/// It rides the **skinned** path rather than a pass of its own, because that pass
-/// applies its palette before the model matrix — so a model-space garment with a
-/// one-entry identity palette lands exactly where the sim put it. No new node, no
-/// new shader, no golden re-blessed.
-///
-/// The instance carries `ID_NONE`, so a garment is not separately pickable:
-/// clicking a coat selects nothing and clicking the character selects the
-/// character, which is the v1 answer and is ledgered. Its geometry is a fresh
-/// `Arc` every projection, which is correct for a surface that moves every step
-/// and is the reason a garment costs one vertex-buffer upload per frame.
-///
-/// Emits nothing for a wearer the sim is not simulating, and nothing for a
-/// garment whose triangles all dropped out — an empty draw is a draw call for no
-/// pixels.
-///
-/// **MIRROR** of the other host's `project_cloth` — keep the two byte-identical,
-/// **this doc block included** (the P21.2 lesson: the mirror gate compares the
-/// comment too). Side-neutral wording on purpose.
 /// One derived material's surface, as `inf_render::skinned_sections` takes it.
 ///
 /// The colour, the three PBR terms, the blend CODE (`0` opaque, `1` masked, `2`
@@ -8359,6 +8333,32 @@ fn derived_surface(
     ))
 }
 
+/// **A simulated garment, as a skinned draw** (P24.4).
+///
+/// The sim's `inf_ecs::cloth` store already holds this wearer's particle
+/// positions *and* the garment's triangle list, so a projector needs no asset
+/// store and no mesh lookup at all: it reads the sim world, the way it reads an
+/// evaluated pose, and builds the vertex stream through the one Ring-0 function
+/// `inf_render::deformed_skinned_mesh`.
+///
+/// It rides the **skinned** path rather than a pass of its own, because that pass
+/// applies its palette before the model matrix — so a model-space garment with a
+/// one-entry identity palette lands exactly where the sim put it. No new node, no
+/// new shader, no golden re-blessed.
+///
+/// The instance carries `ID_NONE`, so a garment is not separately pickable:
+/// clicking a coat selects nothing and clicking the character selects the
+/// character, which is the v1 answer and is ledgered. Its geometry is a fresh
+/// `Arc` every projection, which is correct for a surface that moves every step
+/// and is the reason a garment costs one vertex-buffer upload per frame.
+///
+/// Emits nothing for a wearer the sim is not simulating, and nothing for a
+/// garment whose triangles all dropped out — an empty draw is a draw call for no
+/// pixels.
+///
+/// **MIRROR** of the other host's `project_cloth` — keep the two byte-identical,
+/// **this doc block included** (the P21.2 lesson: the mirror gate compares the
+/// comment too). Side-neutral wording on purpose.
 fn project_cloth(
     scene: &mut inf_render::RenderScene,
     world: &inf_ecs::EcsWorld,

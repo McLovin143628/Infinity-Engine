@@ -1067,9 +1067,19 @@ fn the_skinned_instance_carries_blend_and_cutoff_from_the_material() {
     let pass = std::fs::read_to_string(repo().join("crates/inf-render/src/passes/skinned.rs"))
         .expect("the skinned pass")
         .replace("\r\n", "\n");
+    // **The pin moved with its cause** (wave CHAR1a.3). It read
+    // `inst.blend`/`inst.cutoff`; the pass now reads a SURFACE that is the
+    // section's when the instance has sections and the instance's otherwise, so
+    // the two terms are locals. The packing rule — the whole subject of this
+    // assertion — is unchanged, and the second half is what says the section
+    // path cannot quietly stop being read.
     assert!(
-        pass.contains("inst.blend as f32 * 4.0 + inst.cutoff.clamp(0.0, 1.0)"),
+        pass.contains("blend as f32 * 4.0 + cutoff.clamp(0.0, 1.0)"),
         "the skinned pass no longer packs blend/cutoff into `pbr.w`"
+    );
+    assert!(
+        pass.contains("match section {") && pass.contains("sec.blend,"),
+        "the skinned pass no longer takes blend/cutoff from a SECTION when the          instance has one — a face's eyelash slot would draw with the body's          blend mode"
     );
     let wgsl =
         std::fs::read_to_string(repo().join("crates/inf-render/src/shaders/skinned_mesh.wgsl"))
