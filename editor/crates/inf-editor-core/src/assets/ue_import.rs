@@ -1391,7 +1391,7 @@ fn stem_kind(stem: &str) -> Option<inf_material::ground::GroundKind> {
 /// **Exactly the roles this engine has somewhere to put**, and nothing else:
 /// albedo and normal get their own slot, and occlusion/roughness/metallic are
 /// packed into the one ORM. A role absent from this table is reported by
-/// [`import_material`] rather than dropped in silence.
+/// `import_material` rather than dropped in silence.
 ///
 /// `displacement` is deliberately absent: this engine has no displacement slot
 /// on `.inf_mat`, and importing a height map as a texture nothing samples would

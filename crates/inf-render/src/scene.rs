@@ -1590,7 +1590,7 @@ pub struct SkinnedInstance {
     ///
     /// **`2` draws opaque, and that is stated rather than hidden.** The rigid
     /// path buckets translucent instances into their own draw range
-    /// ([`crate::passes::mesh::pack_bucketed`]); the skinned pipeline has one
+    /// (`crate::passes::mesh::pack_bucketed`); the skinned pipeline has one
     /// blend state and one range per mesh, so a translucent skinned surface is a
     /// pipeline this pass does not have yet. Masked is the case the characters
     /// need and the case this wave built.

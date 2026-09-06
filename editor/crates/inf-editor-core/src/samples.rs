@@ -10666,8 +10666,8 @@ pub fn starter_character_files() -> Result<(Vec<(String, Vec<u8>)>, Vec<String>)
 /// # Why a second FOLDER and not a second body in the first one
 ///
 /// A body is generated FROM its rig: `manny::build_manny` places every joint
-/// from [`BodyParams`] and the mesh is tubes around those joints. So a female
-/// body needs a female-proportioned *skeleton*, and committing only a second
+/// from [`inf_anim::BodyParams`] and the mesh is tubes around those joints, so a
+/// female body needs a female-proportioned *skeleton* — and committing only a second
 /// `.inf_mesh` beside the male's would be a female skin bound to a male bind
 /// pose — the shape would be right and every pose would be wrong. The rig is
 /// what differs, so the character is what is committed: eight assets, the same
