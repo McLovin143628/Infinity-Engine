@@ -272,6 +272,9 @@ PARAM_KIND = {
     "opacity": "opacity", "alpha": "opacity", "mask": "opacity",
     "emissive": "emissive", "emission": "emissive",
     "displacement": "displacement", "height": "displacement",
+    # Wave CHAR1a: the UE5 mannequin material names its albedo slot
+    # "Base Texture", which none of the keys above reach.
+    "base texture": "albedo", "basetex": "albedo", "base": "albedo",
 }
 
 NAME_KIND = [
@@ -282,8 +285,16 @@ NAME_KIND = [
     (r"(?i)(_ao$|occlusion)", "ao"),
     (r"(?i)(_o$|_opacity|_alpha|_mask)", "opacity"),
     (r"(?i)(_e$|_emissive|_emission)", "emissive"),
-    (r"(?i)(_d$|_disp|_height)", "displacement"),
-    (r"(?i)(_bc$|_albedo|_basecolor|_diffuse|_col)", "albedo"),
+    # **`_d$` is DIFFUSE, not displacement** (wave CHAR1a). It used to be the
+    # displacement rule, and the cost was measured on the mannequin:
+    # `T_Manny_01_D` is bound to the parameter literally named "Base Texture"
+    # and is sRGB -- two independent statements that it is an albedo -- and it
+    # was crossing the bridge as a displacement map, which this engine has no
+    # slot for, so it was dropped. The hero drew with a normal map and no base
+    # colour: a grey, noisy body in every frame. Displacement keeps the
+    # unambiguous spellings.
+    (r"(?i)(_disp|_height|_dsp$)", "displacement"),
+    (r"(?i)(_bc$|_d$|_albedo|_basecolor|_diffuse|_col)", "albedo"),
 ]
 
 

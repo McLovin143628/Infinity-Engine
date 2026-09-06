@@ -597,7 +597,23 @@ pub fn import_manifest(
                 // importing rung 1's copy would give the ladder two skeletons
                 // whose joint ORDER agrees only by luck.
                 if lod.level == 0 {
-                    for pid in &out.produced {
+                    // The products of THIS call, plus the mesh's own dependency
+                    // edges. The second half is not belt-and-braces: on a
+                    // re-import the content-hash dedupe reuses the assets that
+                    // are already there and `produced` can be empty, so a body
+                    // imported twice would look to this loop like a body with no
+                    // rig -- which `rebind_character` then refuses, correctly and
+                    // uselessly. The dependency edge is written by `import_file`
+                    // when the mesh is skinned and survives the dedupe.
+                    let mut candidates: Vec<AssetId> = out.produced.clone();
+                    candidates.extend(
+                        project
+                            .db()
+                            .get(id)
+                            .map(|e| e.sidecar.dependencies.clone())
+                            .unwrap_or_default(),
+                    );
+                    for pid in &candidates {
                         if project.db().get(*pid).map(|e| e.kind())
                             == Some(inf_asset::AssetKind::Skeleton)
                         {
@@ -747,6 +763,27 @@ pub fn import_manifest(
                 .push(format!("{}: {}", c.key, rep.summary()));
         }
         report.clips.push((c.key.clone(), id, rep.tracks_out));
+    }
+
+    // -- 2d. the REBOUND character's clips --------------------------------
+    //
+    // **Found by looking at the picture.** Rebinding the body and its rig alone
+    // produced a hero standing in the street with one arm over its head and its
+    // legs splayed, which is what a valid clip played on the wrong rig looks
+    // like: `manny.rs` generates a rig whose every bind rotation is the
+    // IDENTITY (deliberately -- it is what lets the inverse bind be a
+    // translation and keeps the P14 no-trig law), and the shipped mannequin's
+    // bind carries a real rotation on 137 of its 162 nodes. The committed
+    // `Starter_Idle/Walk/Run` write absolute local rotations computed against
+    // the first, and `sample_clip` seeds every untouched joint from the
+    // second's `local_bind`. The two disagree everywhere.
+    //
+    // So a body rebind is not three assets, it is SIX: mesh, rig, skin, and the
+    // three clips the hero's state machine names. The clips come from the same
+    // pack as the body, so they were authored on exactly the rig that is now
+    // underneath it.
+    if opts.rebind_character.is_some() && !report.clips.is_empty() {
+        rebind_character_clips(project, &m.clips, &report.clips.clone(), &mut report)?;
     }
 
     // ── 3. fixtures ──────────────────────────────────────────────────────────
@@ -983,6 +1020,70 @@ fn rebind_character(
         body.triangle_count(),
         skel.skeleton.len()
     ));
+    Ok(())
+}
+
+/// **The three clips the hero's state machine names, from the rebound body's own
+/// pack.**
+///
+/// The mapping is a stated table rather than a heuristic, because "which clip is
+/// the idle" is a decision:
+///
+/// | starter slot | mannequin clip | why |
+/// |---|---|---|
+/// | idle | `MM_Idle` / `MF_Idle` | the only idle either mannequin ships |
+/// | walk | `MM_Walk_Fwd` / `MF_Walk_Fwd` | forward, root-motion, not the in-place variant |
+/// | run  | `MM_Run_Fwd` / `MF_Run_Fwd` | ditto |
+///
+/// `MM_Walk_InPlace` is deliberately NOT the walk: this engine's locomotion
+/// machine drives the body from the movement component and reads the clip for
+/// the pose, so an in-place walk would slide the feet at exactly the speed the
+/// character travels.
+///
+/// A slot with no matching clip keeps the committed generated one and is named
+/// in an advisory — which is the honest failure, because the alternative is a
+/// hero whose walk is somebody else's idle.
+fn rebind_character_clips(
+    project: &mut AssetProject,
+    manifest: &[Clip],
+    imported: &[(String, AssetId, usize)],
+    report: &mut UeImportReport,
+) -> Result<()> {
+    let ids = crate::samples::starter_character_ids();
+    let slots: [(&str, Option<AssetId>, [&str; 2]); 3] = [
+        ("Starter_Idle", ids.idle, ["MM_Idle", "MF_Idle"]),
+        ("Starter_Walk", ids.walk, ["MM_Walk_Fwd", "MF_Walk_Fwd"]),
+        ("Starter_Run", ids.run, ["MM_Run_Fwd", "MF_Run_Fwd"]),
+    ];
+    let by_key: BTreeMap<&str, AssetId> = imported
+        .iter()
+        .map(|(k, id, _)| (k.as_str(), *id))
+        .collect();
+    for (stem, want, names) in slots {
+        let Some(want) = want else { continue };
+        let found = manifest
+            .iter()
+            .find(|c| names.contains(&c.name.as_str()))
+            .and_then(|c| by_key.get(c.key.as_str()).copied());
+        let Some(found) = found else {
+            report.advisories.push(format!(
+                "{stem}: the rebound body's pack ships none of {names:?}, so the \
+                 hero keeps the generated clip -- which was authored against a \
+                 rig whose bind pose is the identity and will look wrong on this \
+                 body"
+            ));
+            continue;
+        };
+        let payload: inf_anim::AnimClipAsset = project.load_payload(found)?;
+        let deps: Vec<AssetId> = project
+            .db()
+            .get(found)
+            .map(|e| e.sidecar.dependencies.clone())
+            .unwrap_or_default();
+        let path = project.root().join(format!("{stem}.inf_anim"));
+        project.write_asset_at_with_id(&path, &payload, want, deps, None)?;
+        report.rebinds.push((format!("{stem}.inf_anim"), want));
+    }
     Ok(())
 }
 
