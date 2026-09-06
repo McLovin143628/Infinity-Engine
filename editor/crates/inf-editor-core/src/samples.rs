@@ -12242,9 +12242,30 @@ mod tests {
         // reference in another file rather than a diff you can read; and the
         // island's hero binds three of these GUIDs, so a silent regeneration is
         // a level that boots with no rig.
-        let scdir = starter_character_dir();
-        if scdir.join("Starter.inf_skel").exists() {
-            let (want, _) = starter_character_files().expect("the starter character builds");
+        // **BOTH committed bodies** (wave CHAR1a.2). One loop rather than two
+        // copies: the female body is the same eight assets naming each other by
+        // GUID, both island recipes copy the set, and every 3D template
+        // scaffolds it — so every argument for locking the male's bytes is an
+        // argument for locking hers.
+        for (scdir, built, readme, marker) in [
+            (
+                starter_character_dir(),
+                starter_character_files(),
+                STARTER_CHARACTER_README,
+                "Starter.inf_skel",
+            ),
+            (
+                starter_character_f_dir(),
+                starter_character_f_files(),
+                STARTER_CHARACTER_F_README,
+                "Starter_F.inf_skel",
+            ),
+        ] {
+            if !scdir.join(marker).exists() {
+                eprintln!("SKIP: {} has not been blessed yet", scdir.display());
+                continue;
+            }
+            let (want, _) = built.expect("the committed character builds");
             let mut have: Vec<String> = std::fs::read_dir(&scdir)
                 .unwrap()
                 .filter_map(|e| e.ok())
@@ -12255,25 +12276,26 @@ mod tests {
             have.sort();
             let names: Vec<String> = want.iter().map(|(n, _)| n.clone()).collect();
             assert_eq!(
-                have, names,
-                "the committed starter character is not the file SET the wizard \
+                have,
+                names,
+                "the committed character in {} is not the file SET the wizard \
                  writes -- an extra file here is one the asset scan promotes \
-                 under a minted GUID, and a missing one is a dangling reference"
+                 under a minted GUID, and a missing one is a dangling reference",
+                scdir.display()
             );
             for (name, bytes) in &want {
                 assert_eq!(
                     &std::fs::read(scdir.join(name)).unwrap(),
                     bytes,
-                    "committed starter-character {name} drifted from the wizard"
+                    "committed {name} drifted from the wizard"
                 );
             }
             assert_eq!(
                 std::fs::read_to_string(scdir.join("README.md")).unwrap(),
-                STARTER_CHARACTER_README,
-                "committed starter-character README drifted from the generator"
+                readme,
+                "committed README in {} drifted from the generator",
+                scdir.display()
             );
-        } else {
-            eprintln!("SKIP: the starter character has not been blessed yet");
         }
 
         // **The ground library (TER2a clause 3).** Every file, for the starter
@@ -12502,36 +12524,48 @@ mod tests {
     #[test]
     fn both_island_recipes_name_the_whole_starter_character() {
         const SKIPPED: [&str; 3] = ["README.md", "camera.toml", "input.toml"];
-        let dir = starter_character_dir();
-        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap_or_else(|e| panic!("no {}: {e}", dir.display()))
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| !SKIPPED.contains(&n.as_str()))
-            .collect();
-        on_disk.sort();
-
+        // **BOTH committed bodies** (wave CHAR1a.2), each against its own path
+        // prefix. Folded into one arm rather than copied into a second, so the
+        // day a third body lands there is one list to grow — and note the
+        // prefixes are checked separately, because `../starter-character-f/X`
+        // also starts with nothing the male prefix matches and a single
+        // `strip_prefix` would have silently seen zero female files.
+        let folders = [
+            ("../starter-character/", starter_character_dir()),
+            ("../starter-character-f/", starter_character_f_dir()),
+        ];
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../samples");
-        for recipe in ["island/island.toml", "island-fixture/island.toml"] {
-            let path = root.join(recipe);
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("no {}: {e}", path.display()));
-            let mut named: Vec<String> = text
-                .lines()
-                .filter_map(|l| {
-                    let l = l.trim().trim_start_matches('"').trim_end_matches(',');
-                    let l = l.trim_end_matches('"');
-                    l.strip_prefix("../starter-character/").map(str::to_string)
-                })
+        for (prefix, dir) in &folders {
+            let mut on_disk: Vec<String> = std::fs::read_dir(dir)
+                .unwrap_or_else(|e| panic!("no {}: {e}", dir.display()))
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| !SKIPPED.contains(&n.as_str()))
                 .collect();
-            named.sort();
-            assert_eq!(
-                named, on_disk,
-                "{recipe}'s `[content]` list is not the starter character — a \
-                 missing entry is an island that boots a hero whose rig resolves \
-                 and whose clips do not"
-            );
+            on_disk.sort();
+            assert!(!on_disk.is_empty(), "{} is empty", dir.display());
+
+            for recipe in ["island/island.toml", "island-fixture/island.toml"] {
+                let path = root.join(recipe);
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("no {}: {e}", path.display()));
+                let mut named: Vec<String> = text
+                    .lines()
+                    .filter_map(|l| {
+                        let l = l.trim().trim_start_matches('"').trim_end_matches(',');
+                        let l = l.trim_end_matches('"');
+                        l.strip_prefix(prefix).map(str::to_string)
+                    })
+                    .collect();
+                named.sort();
+                assert_eq!(
+                    named, on_disk,
+                    "{recipe}'s `[content]` list is not {prefix} — a missing \
+                     entry is an island that boots a body whose rig resolves \
+                     and whose clips do not"
+                );
+            }
         }
     }
 

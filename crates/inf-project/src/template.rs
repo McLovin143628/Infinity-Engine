@@ -236,8 +236,10 @@ pub const SCRIPTS_DIR: &str = "Scripts";
 ///
 /// # What these bytes cost, measured (SK1c audit, M4)
 ///
-/// **152 408 B** over seventeen files, of which `Starter_Body.inf_mesh` is
-/// 95 932. Where that lands:
+/// **736 694 B over thirty-four files** since wave CHAR1a.2 — two committed
+/// bodies, of which the two `*_Body.inf_mesh` are 311 808 B each. (It was
+/// 152 408 over seventeen at SK1c, and 368 344 over seventeen once CHAR1a made
+/// the body 3.8x denser.) Where that lands:
 ///
 /// | | |
 /// |---|---|
@@ -319,6 +321,89 @@ pub const STARTER_CHARACTER: &[(&str, &[u8])] = &[
     (
         "Characters/Starter_Walk.inf_anim.toml",
         include_bytes!("../../../samples/starter-character/Starter_Walk.inf_anim.toml"),
+    ),
+    // ── THE SECOND COMMITTED BODY (wave CHAR1a.2) ────────────────────────────
+    //
+    // The same eight assets, the same 161 joint names in the same order, built
+    // by the same wizard from proportions MEASURED off `SKM_Quinn` rather than
+    // chosen. A body is generated from its rig, so a second body is a second
+    // character and not a second `.inf_mesh` — see
+    // `inf_editor_core::samples::starter_character_f_ids` for every number and
+    // where it was read.
+    //
+    // Both are scaffolded, and the cost is measured rather than assumed: the
+    // female set is 368 350 B over its seventeen files and the male 368 344 B,
+    // so a new 3D project's `Content/Characters/` goes from 368 344 to
+    // 736 694 B. The shipped player still carries none of it —
+    // `starter_content` is reachable from the CLI and the editor and from
+    // nothing `inf-player` links.
+    (
+        "Characters/Starter_F.inf_skel",
+        include_bytes!("../../../samples/starter-character-f/Starter_F.inf_skel"),
+    ),
+    (
+        "Characters/Starter_F.inf_skel.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F.inf_skel.toml"),
+    ),
+    (
+        "Characters/Starter_F_Body.inf_mesh",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Body.inf_mesh"),
+    ),
+    (
+        "Characters/Starter_F_Body.inf_mesh.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Body.inf_mesh.toml"),
+    ),
+    (
+        "Characters/Starter_F_Controller.inf_act",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Controller.inf_act"),
+    ),
+    (
+        "Characters/Starter_F_Controller.inf_act.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Controller.inf_act.toml"),
+    ),
+    (
+        "Characters/Starter_F_Idle.inf_anim",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Idle.inf_anim"),
+    ),
+    (
+        "Characters/Starter_F_Idle.inf_anim.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Idle.inf_anim.toml"),
+    ),
+    (
+        "Characters/Starter_F_Locomotion.inf_sm",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Locomotion.inf_sm"),
+    ),
+    (
+        "Characters/Starter_F_Locomotion.inf_sm.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Locomotion.inf_sm.toml"),
+    ),
+    (
+        "Characters/Starter_F_Locomotion.inf_sm.txt",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Locomotion.inf_sm.txt"),
+    ),
+    (
+        "Characters/Starter_F_Run.inf_anim",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Run.inf_anim"),
+    ),
+    (
+        "Characters/Starter_F_Run.inf_anim.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Run.inf_anim.toml"),
+    ),
+    (
+        "Characters/Starter_F_Skin.inf_mat",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Skin.inf_mat"),
+    ),
+    (
+        "Characters/Starter_F_Skin.inf_mat.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Skin.inf_mat.toml"),
+    ),
+    (
+        "Characters/Starter_F_Walk.inf_anim",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Walk.inf_anim"),
+    ),
+    (
+        "Characters/Starter_F_Walk.inf_anim.toml",
+        include_bytes!("../../../samples/starter-character-f/Starter_F_Walk.inf_anim.toml"),
     ),
 ];
 /// A template's committed boot scene: the payload **and its sidecar**.
@@ -778,15 +863,25 @@ mod tests {
     #[test]
     fn every_3d_template_ships_the_whole_starter_character() {
         const SKIPPED: [&str; 3] = ["README.md", "camera.toml", "input.toml"];
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../samples/starter-character");
-        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
-            .unwrap_or_else(|e| panic!("no {}: {e}", dir.display()))
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| !SKIPPED.contains(&n.as_str()))
-            .collect();
+        // **BOTH committed bodies** (wave CHAR1a.2). The union, because
+        // `STARTER_CHARACTER` scaffolds both and a gate that read one folder
+        // would go green on a template that shipped half a pair.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+        let dirs = [
+            root.join("starter-character"),
+            root.join("starter-character-f"),
+        ];
+        let mut on_disk: Vec<String> = Vec::new();
+        for dir in &dirs {
+            on_disk.extend(
+                std::fs::read_dir(dir)
+                    .unwrap_or_else(|e| panic!("no {}: {e}", dir.display()))
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| !SKIPPED.contains(&n.as_str())),
+            );
+        }
         on_disk.sort();
 
         let mut shipped: Vec<String> = STARTER_CHARACTER
@@ -806,11 +901,17 @@ mod tests {
         );
 
         // …and the bytes really are the committed ones, not a stale copy from
-        // whenever the list was written.
+        // whenever the list was written. Whichever folder holds the file — the
+        // scaffold flattens both into `Characters/`, so the name is the key.
         for (rel, bytes) in STARTER_CHARACTER {
             let name = rel.strip_prefix("Characters/").unwrap();
+            let path = dirs
+                .iter()
+                .map(|d| d.join(name))
+                .find(|p| p.is_file())
+                .unwrap_or_else(|| panic!("{name} is in `STARTER_CHARACTER` and on no disk"));
             assert_eq!(
-                &std::fs::read(dir.join(name)).unwrap(),
+                &std::fs::read(&path).unwrap(),
                 bytes,
                 "{name} is stale in `STARTER_CHARACTER`"
             );

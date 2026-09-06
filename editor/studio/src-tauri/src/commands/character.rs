@@ -194,13 +194,26 @@ pub async fn character_preview(
 /// character is a character by the same definition.
 ///
 /// One undo step, and the placed actor is selected, exactly like a wizard spawn.
+///
+/// **`female` picks which committed body** (wave CHAR1a.2). There are two now —
+/// `samples/starter-character/` and `samples/starter-character-f/`, the same
+/// eight assets on the same 161 joint names, built by the same wizard from two
+/// sets of measured proportions — and every 3D template scaffolds both, so both
+/// resolve in any project this command can run in. `None`/`false` keeps the
+/// male body, which is what every existing caller means.
 #[tauri::command]
 pub async fn character_place_starter(
     app: AppHandle,
     at: Option<[f64; 3]>,
+    female: Option<bool>,
     scene: State<'_, SceneState>,
 ) -> Result<String, String> {
-    let ids = inf_editor_core::samples::starter_character_ids();
+    let female = female.unwrap_or(false);
+    let ids = if female {
+        inf_editor_core::samples::starter_character_f_ids()
+    } else {
+        inf_editor_core::samples::starter_character_ids()
+    };
     let asset = |id: Option<AssetId>| -> Result<uuid::Uuid, String> {
         id.map(|a| a.0)
             .ok_or_else(|| "the starter character's ids are not all fixed".to_string())
@@ -209,15 +222,25 @@ pub async fn character_place_starter(
     let guid = {
         let mut doc = super::scene::lock(&scene.doc)?;
         let guid = doc.edit_create_character(
-            inf_editor_core::samples::STARTER_CHARACTER_NAME,
+            if female {
+                inf_editor_core::samples::STARTER_CHARACTER_F_NAME
+            } else {
+                inf_editor_core::samples::STARTER_CHARACTER_NAME
+            },
             asset(ids.skeleton)?,
             asset(ids.mesh)?,
             asset(ids.machine)?,
             glam::DVec3::new(at[0], at[1], at[2]),
             Some(asset(ids.actor)?),
-            inf_editor_core::samples::starter_character_spec()
-                .params
-                .height_m,
+            if female {
+                inf_editor_core::samples::starter_character_f_spec()
+                    .params
+                    .height_m
+            } else {
+                inf_editor_core::samples::starter_character_spec()
+                    .params
+                    .height_m
+            },
         );
         doc.select(&[guid], false);
         guid

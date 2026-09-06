@@ -1637,8 +1637,14 @@ export const character = {
    * which is what `create` above does not do (it mints six new ones every call).
    * Resolves to the new actor's guid; one undo step, and it is selected.
    */
-  placeStarter: (at?: [number, number, number]): Promise<string> =>
-    invoke<string>("character_place_starter", { at: at ?? null }),
+  placeStarter: (
+    at?: [number, number, number],
+    female?: boolean,
+  ): Promise<string> =>
+    invoke<string>("character_place_starter", {
+      at: at ?? null,
+      female: female ?? null,
+    }),
 
   /** The content sub-folder generated characters land in. */
   folder: (): Promise<string> => invoke<string>("character_folder"),

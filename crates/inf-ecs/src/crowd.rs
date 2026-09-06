@@ -563,6 +563,13 @@ pub const SALT_LOOK: u64 = 0x4c4f_4f4b_0000_0003;
 /// The salt an agent's build (its drawn height and girth) is drawn with.
 pub const SALT_BUILD: u64 = 0x4255_494c_4400_0004;
 
+/// **Which committed body an agent wears** (wave CHAR1a.2) — see
+/// [`crate::society::level_archetype_for`]. Its own salt, so a level that grew a
+/// second body could not move any existing agent's speed, phase, schedule, look
+/// or build: every one of those is drawn from the same generator with a salt of
+/// its own, which is the whole reason the salts are named constants.
+pub const SALT_BODY: u64 = 0x424f_4459_0000_0006;
+
 /// **The crowd's palette swaps** — linear-space multipliers over whatever base
 /// colour the archetype's material resolves to.
 ///

@@ -1,0 +1,6 @@
+schema_version = 1
+guid = "00000000-0000-0000-0000-00005c1000b7"
+kind = "blueprint"
+content_hash = "6b3035e98c0b0195951c4fea13655aae"
+dependencies = ["00000000-0000-0000-0000-00005c1000b6"]
+tags = []

@@ -1,0 +1,293 @@
+pivot_height_ratio = 0.8
+collision_radius_m = 0.15
+state_blend_speed = 6.0
+view_blend_speed = 8.0
+min_arm_fraction = 0.05
+
+[velocity_direction.walk]
+arm_length_m = 3.0
+rotation_lag = 10.0
+fov_deg = 70.0
+
+[velocity_direction.walk.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[velocity_direction.walk.camera_offset]
+x = 0.45
+y = 0.08
+z = 0.0
+
+[velocity_direction.walk.lag_speeds]
+x = 10.0
+y = 4.0
+z = 6.0
+
+[velocity_direction.run]
+arm_length_m = 3.4
+rotation_lag = 10.0
+fov_deg = 70.0
+
+[velocity_direction.run.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[velocity_direction.run.camera_offset]
+x = 0.45
+y = 0.08
+z = 0.0
+
+[velocity_direction.run.lag_speeds]
+x = 10.0
+y = 4.0
+z = 8.0
+
+[velocity_direction.sprint]
+arm_length_m = 4.0
+rotation_lag = 10.0
+fov_deg = 78.0
+
+[velocity_direction.sprint.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[velocity_direction.sprint.camera_offset]
+x = 0.45
+y = 0.08
+z = 0.0
+
+[velocity_direction.sprint.lag_speeds]
+x = 6.0
+y = 4.0
+z = 4.0
+
+[velocity_direction.crouch]
+arm_length_m = 2.5
+rotation_lag = 10.0
+fov_deg = 70.0
+
+[velocity_direction.crouch.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[velocity_direction.crouch.camera_offset]
+x = 0.45
+y = 0.0
+z = 0.0
+
+[velocity_direction.crouch.lag_speeds]
+x = 10.0
+y = 4.0
+z = 8.0
+
+[looking_direction.walk]
+arm_length_m = 3.0
+rotation_lag = 10.0
+fov_deg = 70.0
+
+[looking_direction.walk.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[looking_direction.walk.camera_offset]
+x = 0.45
+y = 0.08
+z = 0.0
+
+[looking_direction.walk.lag_speeds]
+x = 10.0
+y = 4.0
+z = 6.0
+
+[looking_direction.run]
+arm_length_m = 3.4
+rotation_lag = 10.0
+fov_deg = 70.0
+
+[looking_direction.run.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[looking_direction.run.camera_offset]
+x = 0.45
+y = 0.08
+z = 0.0
+
+[looking_direction.run.lag_speeds]
+x = 10.0
+y = 4.0
+z = 8.0
+
+[looking_direction.sprint]
+arm_length_m = 4.0
+rotation_lag = 10.0
+fov_deg = 78.0
+
+[looking_direction.sprint.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[looking_direction.sprint.camera_offset]
+x = 0.45
+y = 0.08
+z = 0.0
+
+[looking_direction.sprint.lag_speeds]
+x = 6.0
+y = 4.0
+z = 4.0
+
+[looking_direction.crouch]
+arm_length_m = 2.5
+rotation_lag = 10.0
+fov_deg = 70.0
+
+[looking_direction.crouch.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[looking_direction.crouch.camera_offset]
+x = 0.45
+y = 0.0
+z = 0.0
+
+[looking_direction.crouch.lag_speeds]
+x = 10.0
+y = 4.0
+z = 8.0
+
+[aiming.walk]
+arm_length_m = 2.0
+rotation_lag = 20.0
+fov_deg = 55.0
+
+[aiming.walk.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[aiming.walk.camera_offset]
+x = 0.55
+y = 0.05
+z = 0.0
+
+[aiming.walk.lag_speeds]
+x = 20.0
+y = 20.0
+z = 20.0
+
+[aiming.run]
+arm_length_m = 2.0
+rotation_lag = 20.0
+fov_deg = 55.0
+
+[aiming.run.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[aiming.run.camera_offset]
+x = 0.55
+y = 0.05
+z = 0.0
+
+[aiming.run.lag_speeds]
+x = 20.0
+y = 20.0
+z = 20.0
+
+[aiming.sprint]
+arm_length_m = 2.0
+rotation_lag = 20.0
+fov_deg = 55.0
+
+[aiming.sprint.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[aiming.sprint.camera_offset]
+x = 0.55
+y = 0.05
+z = 0.0
+
+[aiming.sprint.lag_speeds]
+x = 20.0
+y = 20.0
+z = 20.0
+
+[aiming.crouch]
+arm_length_m = 2.0
+rotation_lag = 20.0
+fov_deg = 55.0
+
+[aiming.crouch.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[aiming.crouch.camera_offset]
+x = 0.55
+y = 0.05
+z = 0.0
+
+[aiming.crouch.lag_speeds]
+x = 20.0
+y = 20.0
+z = 20.0
+
+[first_person]
+arm_length_m = 0.0
+rotation_lag = 30.0
+fov_deg = 90.0
+
+[first_person.pivot_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[first_person.camera_offset]
+x = 0.0
+y = 0.1
+z = 0.12
+
+[first_person.lag_speeds]
+x = 30.0
+y = 30.0
+z = 30.0
+
+[driving]
+arm_per_length_m = 0.55
+arm_per_speed_s = 0.045
+fov_per_speed_deg_s = 0.42
+fov_gain_max_deg = 14.0
+look_ahead_s = 0.35
+align_speed_mps = 9.0
+
+[driving.base]
+arm_length_m = 5.0
+rotation_lag = 4.0
+fov_deg = 72.0
+
+[driving.base.pivot_offset]
+x = 0.0
+y = 0.55
+z = 0.0
+
+[driving.base.camera_offset]
+x = 0.0
+y = 0.0
+z = 0.0
+
+[driving.base.lag_speeds]
+x = 6.0
+y = 5.0
+z = 3.5

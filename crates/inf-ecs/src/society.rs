@@ -698,24 +698,85 @@ fn heavy_facts(world: &EcsWorld, want: &BTreeSet<Uuid>) -> BTreeMap<Uuid, Volume
 /// for a level that has nothing to draw it with, and it is why this returns a
 /// value rather than an `Option` a caller would have to case-split.
 pub fn level_archetype(world: &EcsWorld) -> CrowdArchetype {
-    let mut best: Option<(Uuid, CrowdArchetype)> = None;
+    level_archetypes(world)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| CrowdArchetype::humanoid(None, None, None))
+}
+
+/// **Every body the level offers**, distinct by `(mesh, skeleton, machine)`, in
+/// `Guid` order (wave CHAR1a.2).
+///
+/// [`level_archetype`] answers with the first of these, which is what it always
+/// answered and what a single-body caller still wants. This is the door a CROWD
+/// takes, because a street in which every person is the same person is a street
+/// nobody believes — and until this wave that was not a content problem, it was
+/// a rule: the body was "the lowest-`Guid` rigged entity", singular, so a level
+/// carrying a man and a woman dressed all thousand of its pedestrians as the
+/// man.
+///
+/// Distinctness is by the three asset ids and nothing else. Two entities wearing
+/// the same body are one body, however many of them there are, so a level that
+/// spawns ten copies of its hero still offers one archetype and its crowd is
+/// unchanged — the property that keeps every committed level's crowd exactly
+/// where it was.
+///
+/// **Crowd agents are excluded from the survey**, and that is load-bearing: a
+/// materialized agent *is* an entity carrying a rigged `SkeletalMesh`, so a
+/// survey that counted them would feed the crowd's own output back into its
+/// input and the set could grow on the second step. The predicate is the
+/// [`CrowdAgent`](crate::crowd::CrowdAgent) component, which is exactly "this
+/// entity is one of ours".
+///
+/// Returns an EMPTY vector for a level with no rigged character; the callers'
+/// own fallback (a bodiless humanoid, which still walks and collides and traces)
+/// belongs to them.
+pub fn level_archetypes(world: &EcsWorld) -> Vec<CrowdArchetype> {
+    let mut found: Vec<(Uuid, CrowdArchetype)> = Vec::new();
     for e in world.world().iter_entities() {
         let (Some(g), Some(sk)) = (e.get::<Guid>(), e.get::<crate::components::SkeletalMesh>())
         else {
             continue;
         };
-        if sk.skeleton.is_none() {
+        if sk.skeleton.is_none() || e.get::<crate::crowd::CrowdAgent>().is_some() {
             continue;
         }
         let sm = e
             .get::<crate::components::AnimStateMachine>()
             .and_then(|a| a.sm);
-        if best.as_ref().is_none_or(|(bg, _)| g.0 < *bg) {
-            best = Some((g.0, CrowdArchetype::humanoid(sk.mesh, sk.skeleton, sm)));
+        let a = CrowdArchetype::humanoid(sk.mesh, sk.skeleton, sm);
+        if found
+            .iter()
+            .any(|(_, b)| (b.mesh, b.skeleton, b.sm) == (a.mesh, a.skeleton, a.sm))
+        {
+            continue;
         }
+        found.push((g.0, a));
     }
-    best.map(|(_, a)| a)
-        .unwrap_or_else(|| CrowdArchetype::humanoid(None, None, None))
+    // `iter_entities` walks bevy's archetype layout, which is not an order this
+    // engine may depend on — the same rule `level_archetype` stated by taking a
+    // minimum rather than a first.
+    found.sort_by_key(|(g, _)| *g);
+    found.into_iter().map(|(_, a)| a).collect()
+}
+
+/// **The body one agent wears**, chosen from [`level_archetypes`] by that
+/// agent's own `Guid` (wave CHAR1a.2).
+///
+/// Deterministic and stateless: the same agent picks the same body on every
+/// host, every run and every reload, because the only input is the id it already
+/// carries. A one-body level answers that body for every agent, so nothing a
+/// committed level does changes.
+///
+/// The salt is [`crate::crowd::SALT_BODY`], its own, so adding this could not
+/// move any existing agent's speed, phase, schedule, look or build — all of
+/// which are drawn from the same generator with salts of their own.
+pub fn level_archetype_for(bodies: &[CrowdArchetype], guid: Uuid) -> CrowdArchetype {
+    if bodies.is_empty() {
+        return CrowdArchetype::humanoid(None, None, None);
+    }
+    let i = crate::crowd::agent_rand(guid, 0, crate::crowd::SALT_BODY) as usize % bodies.len();
+    bodies[i]
 }
 
 /// **Grow the level's society, and install any day it can plan** (NPC1d) — the

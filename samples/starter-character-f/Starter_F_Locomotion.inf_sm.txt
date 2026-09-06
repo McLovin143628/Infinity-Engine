@@ -1,0 +1,74 @@
+# An Infini Engine state machine, as text (pillar S1).
+#
+# This is the reviewable face of a `.inf_sm`; the binary payload beside it is
+# the machine face. Every authorable value is its own line, so a tweak is a
+# one-line diff. Conditions are expressions: `&&` binds tighter than `||`,
+# `!` tighter than both, and `trigger <name>` reads a trigger parameter.
+
+entry = "idle"
+
+[[params]]
+name = "speed"
+kind = "float"
+default = 0.0
+
+[[profiles]]
+name = "Mask_AimOffset"
+weights = [{ joint = 2, weight = 1.0 }, { joint = 3, weight = 1.0 }, { joint = 4, weight = 1.0 }, { joint = 5, weight = 1.0 }, { joint = 6, weight = 1.0 }, { joint = 7, weight = 1.0 }, { joint = 8, weight = 1.0 }, { joint = 9, weight = 1.0 }, { joint = 10, weight = 1.0 }, { joint = 11, weight = 1.0 }, { joint = 12, weight = 1.0 }, { joint = 13, weight = 1.0 }, { joint = 14, weight = 1.0 }, { joint = 15, weight = 1.0 }, { joint = 16, weight = 1.0 }, { joint = 17, weight = 1.0 }, { joint = 18, weight = 1.0 }, { joint = 19, weight = 1.0 }, { joint = 20, weight = 1.0 }, { joint = 21, weight = 1.0 }, { joint = 22, weight = 1.0 }, { joint = 23, weight = 1.0 }, { joint = 24, weight = 1.0 }, { joint = 25, weight = 1.0 }, { joint = 26, weight = 1.0 }, { joint = 27, weight = 1.0 }, { joint = 28, weight = 1.0 }, { joint = 29, weight = 1.0 }, { joint = 30, weight = 1.0 }, { joint = 31, weight = 1.0 }, { joint = 32, weight = 1.0 }, { joint = 33, weight = 1.0 }, { joint = 34, weight = 1.0 }, { joint = 35, weight = 1.0 }, { joint = 36, weight = 1.0 }, { joint = 37, weight = 1.0 }, { joint = 38, weight = 1.0 }, { joint = 39, weight = 1.0 }, { joint = 40, weight = 1.0 }, { joint = 41, weight = 1.0 }, { joint = 42, weight = 1.0 }, { joint = 43, weight = 1.0 }, { joint = 44, weight = 1.0 }, { joint = 45, weight = 1.0 }, { joint = 46, weight = 1.0 }, { joint = 47, weight = 1.0 }, { joint = 48, weight = 1.0 }, { joint = 49, weight = 1.0 }, { joint = 50, weight = 1.0 }, { joint = 51, weight = 1.0 }, { joint = 52, weight = 1.0 }, { joint = 53, weight = 1.0 }, { joint = 54, weight = 1.0 }, { joint = 55, weight = 1.0 }, { joint = 56, weight = 1.0 }, { joint = 57, weight = 1.0 }, { joint = 58, weight = 1.0 }, { joint = 59, weight = 1.0 }, { joint = 60, weight = 1.0 }, { joint = 61, weight = 1.0 }, { joint = 62, weight = 1.0 }, { joint = 63, weight = 1.0 }, { joint = 64, weight = 1.0 }, { joint = 65, weight = 1.0 }, { joint = 66, weight = 1.0 }, { joint = 67, weight = 1.0 }, { joint = 68, weight = 1.0 }, { joint = 69, weight = 1.0 }, { joint = 70, weight = 1.0 }, { joint = 71, weight = 1.0 }, { joint = 72, weight = 1.0 }, { joint = 73, weight = 1.0 }, { joint = 74, weight = 1.0 }, { joint = 75, weight = 1.0 }, { joint = 76, weight = 1.0 }, { joint = 77, weight = 1.0 }, { joint = 78, weight = 1.0 }, { joint = 79, weight = 1.0 }, { joint = 80, weight = 1.0 }, { joint = 81, weight = 1.0 }, { joint = 82, weight = 1.0 }, { joint = 83, weight = 1.0 }, { joint = 84, weight = 1.0 }, { joint = 85, weight = 1.0 }, { joint = 86, weight = 1.0 }, { joint = 87, weight = 1.0 }, { joint = 88, weight = 1.0 }, { joint = 89, weight = 1.0 }, { joint = 90, weight = 1.0 }, { joint = 91, weight = 1.0 }, { joint = 92, weight = 1.0 }, { joint = 93, weight = 1.0 }, { joint = 94, weight = 1.0 }, { joint = 95, weight = 1.0 }, { joint = 96, weight = 1.0 }, { joint = 97, weight = 1.0 }, { joint = 98, weight = 1.0 }, { joint = 99, weight = 1.0 }, { joint = 100, weight = 1.0 }, { joint = 101, weight = 1.0 }, { joint = 102, weight = 1.0 }, { joint = 103, weight = 1.0 }, { joint = 104, weight = 1.0 }, { joint = 105, weight = 1.0 }]
+
+[[states]]
+name = "idle"
+looping = true
+speed = 1.0
+position = [0.0, 0.0]
+clip = "00000000-0000-0000-0000-00005c1000b3"
+
+[[states]]
+name = "walk"
+looping = true
+speed = 1.0
+position = [240.0, 0.0]
+clip = "00000000-0000-0000-0000-00005c1000b4"
+
+[[states]]
+name = "run"
+looping = true
+speed = 1.0
+position = [480.0, 0.0]
+clip = "00000000-0000-0000-0000-00005c1000b5"
+
+[[transitions]]
+from = "idle"
+to = "walk"
+duration = 0.15
+condition = "speed > 0.34647709131240845"
+curve = "ease_in_out"
+blend = "inherit"
+interrupt = "destination/carry"
+
+[[transitions]]
+from = "walk"
+to = "idle"
+duration = 0.15
+condition = "speed <= 0.34647709131240845"
+curve = "ease_in_out"
+blend = "inherit"
+interrupt = "destination/carry"
+
+[[transitions]]
+from = "walk"
+to = "run"
+duration = 0.15
+condition = "speed > 1.2212250232696533"
+curve = "ease_in_out"
+blend = "inherit"
+interrupt = "destination/carry"
+
+[[transitions]]
+from = "run"
+to = "walk"
+duration = 0.15
+condition = "speed <= 1.2212250232696533"
+curve = "ease_in_out"
+blend = "inherit"
+interrupt = "destination/carry"

@@ -1,0 +1,365 @@
+{
+  "schema_version": 1,
+  "id": "starter_f.controller",
+  "name": "Starter_F Controller",
+  "components": [],
+  "variables": [
+    {
+      "name": "entity",
+      "ty": "Int",
+      "default": {
+        "Int": 0
+      },
+      "exposed": false
+    },
+    {
+      "name": "steps",
+      "ty": "Float",
+      "default": {
+        "Float": 0.0
+      },
+      "exposed": true
+    },
+    {
+      "name": "run_time",
+      "ty": "Float",
+      "default": {
+        "Float": 0.0
+      },
+      "exposed": true
+    }
+  ],
+  "events": [
+    {
+      "event": "BeginPlay",
+      "body": {
+        "id": "begin_play",
+        "name": "begin_play",
+        "params": [],
+        "ret": "Unit",
+        "body": [
+          {
+            "ExprStmt": {
+              "Call": {
+                "path": [
+                  "vars",
+                  "set"
+                ],
+                "args": [
+                  {
+                    "Lit": {
+                      "Str": "steps"
+                    }
+                  },
+                  {
+                    "Lit": {
+                      "Float": 0.0
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "ExprStmt": {
+              "Call": {
+                "path": [
+                  "vars",
+                  "set"
+                ],
+                "args": [
+                  {
+                    "Lit": {
+                      "Str": "run_time"
+                    }
+                  },
+                  {
+                    "Lit": {
+                      "Float": 0.0
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "event": "Tick",
+      "body": {
+        "id": "tick",
+        "name": "tick",
+        "params": [
+          {
+            "name": "dt",
+            "ty": "Float"
+          }
+        ],
+        "ret": "Unit",
+        "body": [
+          {
+            "Let": {
+              "id": 1,
+              "binding": {
+                "Named": "entity"
+              },
+              "ty": null,
+              "mutable": false,
+              "value": {
+                "Call": {
+                  "path": [
+                    "vars",
+                    "get"
+                  ],
+                  "args": [
+                    {
+                      "Lit": {
+                        "Str": "entity"
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "If": {
+              "cond": {
+                "Call": {
+                  "path": [
+                    "anim",
+                    "consume_notify"
+                  ],
+                  "args": [
+                    {
+                      "Local": 1
+                    },
+                    {
+                      "Lit": {
+                        "Str": "footstep_thigh_l"
+                      }
+                    }
+                  ]
+                }
+              },
+              "then_body": [
+                {
+                  "ExprStmt": {
+                    "Call": {
+                      "path": [
+                        "vars",
+                        "set"
+                      ],
+                      "args": [
+                        {
+                          "Lit": {
+                            "Str": "steps"
+                          }
+                        },
+                        {
+                          "Binary": [
+                            "Add",
+                            {
+                              "Call": {
+                                "path": [
+                                  "vars",
+                                  "get"
+                                ],
+                                "args": [
+                                  {
+                                    "Lit": {
+                                      "Str": "steps"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "Lit": {
+                                "Float": 1.0
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "else_body": []
+            }
+          },
+          {
+            "If": {
+              "cond": {
+                "Call": {
+                  "path": [
+                    "anim",
+                    "consume_notify"
+                  ],
+                  "args": [
+                    {
+                      "Local": 1
+                    },
+                    {
+                      "Lit": {
+                        "Str": "footstep_thigh_r"
+                      }
+                    }
+                  ]
+                }
+              },
+              "then_body": [
+                {
+                  "ExprStmt": {
+                    "Call": {
+                      "path": [
+                        "vars",
+                        "set"
+                      ],
+                      "args": [
+                        {
+                          "Lit": {
+                            "Str": "steps"
+                          }
+                        },
+                        {
+                          "Binary": [
+                            "Add",
+                            {
+                              "Call": {
+                                "path": [
+                                  "vars",
+                                  "get"
+                                ],
+                                "args": [
+                                  {
+                                    "Lit": {
+                                      "Str": "steps"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "Lit": {
+                                "Float": 1.0
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "else_body": []
+            }
+          },
+          {
+            "If": {
+              "cond": {
+                "Call": {
+                  "path": [
+                    "anim",
+                    "query_state"
+                  ],
+                  "args": [
+                    {
+                      "Local": 1
+                    },
+                    {
+                      "Lit": {
+                        "Str": "run"
+                      }
+                    }
+                  ]
+                }
+              },
+              "then_body": [
+                {
+                  "ExprStmt": {
+                    "Call": {
+                      "path": [
+                        "vars",
+                        "set"
+                      ],
+                      "args": [
+                        {
+                          "Lit": {
+                            "Str": "run_time"
+                          }
+                        },
+                        {
+                          "Binary": [
+                            "Add",
+                            {
+                              "Call": {
+                                "path": [
+                                  "vars",
+                                  "get"
+                                ],
+                                "args": [
+                                  {
+                                    "Lit": {
+                                      "Str": "run_time"
+                                    }
+                                  }
+                                ]
+                              }
+                            },
+                            {
+                              "Param": "dt"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ],
+              "else_body": []
+            }
+          },
+          {
+            "ExprStmt": {
+              "Call": {
+                "path": [
+                  "anim",
+                  "set_param"
+                ],
+                "args": [
+                  {
+                    "Local": 1
+                  },
+                  {
+                    "Lit": {
+                      "Str": "steps"
+                    }
+                  },
+                  {
+                    "Call": {
+                      "path": [
+                        "vars",
+                        "get"
+                      ],
+                      "args": [
+                        {
+                          "Lit": {
+                            "Str": "steps"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "functions": []
+}
