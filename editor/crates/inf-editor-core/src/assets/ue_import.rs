@@ -1282,88 +1282,43 @@ fn split_udim_sections(
     let Ok(mut asset) = project.load_payload::<inf_mesh::MeshAsset>(mesh) else {
         return;
     };
-    // A glTF with its own primitives has already said where its sections are;
-    // this is only for the mesh that came across as ONE primitive carrying more
-    // than one atlas.
-    if asset.submeshes.len() != 1 {
-        return;
-    }
-    let sub = &asset.submeshes[0];
-    let tile_of = |i: u32| sub.vertices[i as usize].uv[0].floor() as i32;
-    let mut per_tile: BTreeMap<i32, Vec<[u32; 3]>> = BTreeMap::new();
-    let mut straddling = 0usize;
-    for t in sub.indices.chunks_exact(3) {
-        let (a, b, c) = (tile_of(t[0]), tile_of(t[1]), tile_of(t[2]));
-        if a != b || b != c {
-            straddling += 1;
-            continue;
+    let (tiles, submeshes) = match asset.split_uv_tiles() {
+        inf_mesh::UvTileSplit::NotNeeded => return,
+        inf_mesh::UvTileSplit::Straddling(n) => {
+            report.advisories.push(format!(
+                "{}: {n} triangles straddle a uv tile boundary — the mesh is left \
+                 unsplit and its {} material slots draw as one",
+                sk.key,
+                sk.material_slots.len()
+            ));
+            return;
         }
-        per_tile.entry(a).or_default().push([t[0], t[1], t[2]]);
-    }
-    if per_tile.len() < 2 {
-        return;
-    }
-    if straddling > 0 {
+        inf_mesh::UvTileSplit::Split { tiles, submeshes } => (tiles, submeshes),
+    };
+    if tiles.len() != sk.material_slots.len() {
         report.advisories.push(format!(
-            "{}: {straddling} triangles straddle a uv tile boundary — the mesh is \
-             left unsplit and its {} material slots draw as one",
-            sk.key,
-            sk.material_slots.len()
-        ));
-        return;
-    }
-    if per_tile.len() != sk.material_slots.len() {
-        report.advisories.push(format!(
-            "{}: the uv occupies {} tiles {:?} and the manifest declares {} \
+            "{}: the uv occupies {} tiles {tiles:?} and the manifest declares {} \
              material slots — the mesh is left unsplit rather than split into \
              sections nothing can name",
             sk.key,
-            per_tile.len(),
-            per_tile.keys().collect::<Vec<_>>(),
+            tiles.len(),
             sk.material_slots.len()
         ));
         return;
     }
-    let src = asset.submeshes[0].clone();
-    let mut out: Vec<inf_mesh::SubMesh> = Vec::with_capacity(per_tile.len());
-    let mut census: Vec<String> = Vec::new();
-    for (slot, (tile, tris)) in per_tile.into_iter().enumerate() {
-        // Only the vertices this tile references, renumbered in first-use order
-        // so the section is a standalone buffer rather than a mask over the old
-        // one.
-        let mut remap: BTreeMap<u32, u32> = BTreeMap::new();
-        let mut vertices: Vec<inf_mesh::MeshVertex> = Vec::new();
-        let mut skin: Vec<inf_mesh::VertexSkin> = Vec::new();
-        let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
-        for t in &tris {
-            for &v in t {
-                let next = remap.len() as u32;
-                let n = *remap.entry(v).or_insert(next);
-                if n as usize == vertices.len() {
-                    let mut mv = src.vertices[v as usize];
-                    mv.uv[0] -= tile as f32;
-                    vertices.push(mv);
-                    if let Some(w) = src.skin.get(v as usize) {
-                        skin.push(*w);
-                    }
-                }
-                indices.push(n);
-            }
-        }
-        census.push(format!(
-            "tile {} → slot {slot}: {} triangles, {} vertices",
-            1001 + tile,
-            tris.len(),
-            vertices.len()
-        ));
-        out.push(inf_mesh::SubMesh {
-            name: format!("udim_{}", 1001 + tile),
-            vertices,
-            indices,
-            material_slot: Some(slot as u32),
-            skin,
-        });
-    }
+    let census: Vec<String> = tiles
+        .iter()
+        .zip(submeshes.iter())
+        .enumerate()
+        .map(|(slot, (tile, sub))| {
+            format!(
+                "tile {} → slot {slot}: {} triangles, {} vertices",
+                1001 + tile,
+                sub.triangle_count(),
+                sub.vertex_count()
+            )
+        })
+        .collect();
     // The payload's slot NAMES become the manifest's own keys, so the table
     // `bind_slots` writes next is indexable by the index `SubMesh::material_slot`
     // carries — the two lists are one list now, rather than two orders zipped.
@@ -1376,7 +1331,7 @@ fn split_udim_sections(
                 .unwrap_or_else(|| format!("udim_{}", 1001 + i as i32))
         })
         .collect();
-    asset.submeshes = out;
+    asset.submeshes = submeshes;
     let Some(entry) = project.db().get(mesh) else {
         return;
     };

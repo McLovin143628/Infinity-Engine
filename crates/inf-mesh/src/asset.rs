@@ -230,6 +230,23 @@ pub struct MeshAsset {
     pub material_slot_assets: Vec<Option<inf_asset::AssetId>>,
 }
 
+/// What [`MeshAsset::split_uv_tiles`] found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UvTileSplit {
+    /// Nothing to do: not a single-primitive mesh, or one uv tile.
+    NotNeeded,
+    /// This many triangles have vertices in two different tiles, so the mesh
+    /// cannot be split without tearing it. The caller leaves it alone and says
+    /// so — a guess here is a seam down a character.
+    Straddling(usize),
+    /// One submesh per tile, tiles ascending, uv rebased into `[0,1)`.
+    Split {
+        /// The `floor(u)` of each returned submesh, ascending.
+        tiles: Vec<i32>,
+        submeshes: Vec<SubMesh>,
+    },
+}
+
 impl MeshAsset {
     /// Schema v2 (P11.1): [`SubMesh`] gained the additive, `#[serde(default)]`
     /// `skin` stream. A v1 payload has no skinned submeshes; new payloads always
@@ -291,6 +308,95 @@ impl MeshAsset {
             .get(slot as usize)
             .copied()
             .flatten()
+    }
+
+    /// **SPLIT A UDIM MESH INTO ONE SUBMESH PER UV TILE** (wave CHAR1a.3 audit).
+    ///
+    /// A **UDIM tile** is `floor(u)`: an authoring convention in which a surface
+    /// that needs more than one texture atlas puts each atlas in its own unit
+    /// square of uv space. This engine samples ONE atlas per material, so a tile
+    /// is a SECTION — and [`skinned_sections`](Self::skinned_sections) already
+    /// knows how to draw one range per slot. What was missing was the step that
+    /// turns a mesh carrying two atlases in one primitive into a mesh with two.
+    ///
+    /// It exists because UE's `CreateCombinedFaceAndBodyMesh` produces exactly
+    /// that: a MetaHuman's face welded onto its body with the FACE's uv in tile
+    /// 1001 and the BODY's in tile 1002, and one material slot over both.
+    /// Imported as it stood, the head sampled the body's atlas — a map of torso,
+    /// hands, feet and underwear with no face on it.
+    ///
+    /// The rule, and what it refuses:
+    ///
+    /// * a mesh that is not ONE submesh has already been told where its sections
+    ///   are, by whoever authored its primitives → [`UvTileSplit::NotNeeded`];
+    /// * a mesh whose uv lives in one tile is an ordinary mesh →
+    ///   [`UvTileSplit::NotNeeded`];
+    /// * a single triangle with vertices in two tiles cannot belong to either,
+    ///   and a split that guessed would tear the surface →
+    ///   [`UvTileSplit::Straddling`], and the caller leaves the mesh alone.
+    ///
+    /// Each returned submesh carries only the vertices its own triangles use,
+    /// renumbered in first-use order, and its uv **rebased into `[0,1)`** by
+    /// subtracting its tile. The virtual-texture path wraps
+    /// (`uv - floor(uv)` in `vt_sample.wgsl`) and would not need the rebase;
+    /// every other reader of a mesh uv — a thumbnail, a bake, a sampler that
+    /// clamps — does, and a section whose uv means "this atlas" is the honest
+    /// payload. Tiles come back in ASCENDING order, which is the order the
+    /// bridge declares its slots in.
+    pub fn split_uv_tiles(&self) -> UvTileSplit {
+        if self.submeshes.len() != 1 {
+            return UvTileSplit::NotNeeded;
+        }
+        let src = &self.submeshes[0];
+        let tile_of = |i: u32| src.vertices[i as usize].uv[0].floor() as i32;
+        let mut per_tile: std::collections::BTreeMap<i32, Vec<[u32; 3]>> = Default::default();
+        let mut straddling = 0usize;
+        for t in src.indices.chunks_exact(3) {
+            let (a, b, c) = (tile_of(t[0]), tile_of(t[1]), tile_of(t[2]));
+            if a != b || b != c {
+                straddling += 1;
+                continue;
+            }
+            per_tile.entry(a).or_default().push([t[0], t[1], t[2]]);
+        }
+        if straddling > 0 {
+            return UvTileSplit::Straddling(straddling);
+        }
+        if per_tile.len() < 2 {
+            return UvTileSplit::NotNeeded;
+        }
+        let mut tiles = Vec::with_capacity(per_tile.len());
+        let mut submeshes = Vec::with_capacity(per_tile.len());
+        for (slot, (tile, tris)) in per_tile.into_iter().enumerate() {
+            let mut remap: std::collections::BTreeMap<u32, u32> = Default::default();
+            let mut vertices: Vec<MeshVertex> = Vec::new();
+            let mut skin: Vec<VertexSkin> = Vec::new();
+            let mut indices: Vec<u32> = Vec::with_capacity(tris.len() * 3);
+            for t in &tris {
+                for &v in t {
+                    let next = remap.len() as u32;
+                    let n = *remap.entry(v).or_insert(next);
+                    if n as usize == vertices.len() {
+                        let mut mv = src.vertices[v as usize];
+                        mv.uv[0] -= tile as f32;
+                        vertices.push(mv);
+                        if let Some(w) = src.skin.get(v as usize) {
+                            skin.push(*w);
+                        }
+                    }
+                    indices.push(n);
+                }
+            }
+            tiles.push(tile);
+            submeshes.push(SubMesh {
+                name: format!("udim_{}", 1001 + tile),
+                vertices,
+                indices,
+                material_slot: Some(slot as u32),
+                skin,
+            });
+        }
+        UvTileSplit::Split { tiles, submeshes }
     }
 
     /// **The DRAWN sections of this mesh's skinned geometry**, as

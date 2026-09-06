@@ -24,7 +24,8 @@ pub mod optimize;
 pub mod validate;
 
 pub use asset::{
-    encode_v2_for_test, Aabb, MeshAsset, MeshVertex, SubMesh, VertexSkin, TANGENT_PLACEHOLDER,
+    encode_v2_for_test, Aabb, MeshAsset, MeshVertex, SubMesh, UvTileSplit, VertexSkin,
+    TANGENT_PLACEHOLDER,
 };
 pub use error::MeshError;
 pub use fracture::{

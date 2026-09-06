@@ -888,6 +888,218 @@ fn the_editor_reprojects_once_after_a_vt_level_is_installed() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// (7) THE FACE IS A FACE — wave CHAR1a.3 AUDIT
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **A UDIM MESH SPLITS INTO ONE SECTION PER TILE, AND A TORN ONE REFUSES.**
+///
+/// The rule `MeshAsset::split_uv_tiles` states, asserted on a synthetic mesh so
+/// it runs on CI where the MetaHumans do not exist: two quads, one with its uv in
+/// tile 1001 and one in tile 1002, come back as two submeshes carrying only their
+/// own vertices with their uv rebased into `[0,1)`; the same mesh with a single
+/// triangle spanning the two tiles refuses; a mesh whose uv is all in one tile is
+/// left alone. And the split feeds `skinned_sections`, which is what actually
+/// draws two materials over one palette.
+///
+/// **The mutations**, each verified:
+/// * drop the `mv.uv[0] -= tile` rebase → the second section's uv comes back at
+///   1.1 and the `< 1.0` assertion reds;
+/// * drop the `Straddling` early return → the torn mesh splits into two sections
+///   and the refusal assertion reds;
+/// * return every triangle as its own submesh → the triangle counts red.
+#[test]
+fn a_udim_mesh_splits_into_one_section_per_tile() {
+    use inf_mesh::{MeshAsset, MeshVertex, SubMesh, UvTileSplit};
+
+    // One quad at u∈[0,1) and one at u∈[1,2), in ONE primitive — the shape UE's
+    // combined MetaHuman body arrives in.
+    let quad = |u0: f32, y: f32| -> (Vec<MeshVertex>, Vec<u32>) {
+        let v = |x: f32, uy: f32, uu: f32| MeshVertex {
+            position: [x, y, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            uv: [u0 + uu, uy],
+            tangent: inf_mesh::TANGENT_PLACEHOLDER,
+        };
+        (
+            vec![
+                v(0.0, 0.0, 0.1),
+                v(1.0, 0.0, 0.9),
+                v(1.0, 1.0, 0.9),
+                v(0.0, 1.0, 0.1),
+            ],
+            vec![0, 1, 2, 0, 2, 3],
+        )
+    };
+    let (mut verts, mut idx) = quad(0.0, 0.0);
+    let (v2, i2) = quad(1.0, 2.0);
+    let base = verts.len() as u32;
+    verts.extend(v2);
+    idx.extend(i2.iter().map(|i| i + base));
+    let mesh = MeshAsset::new(
+        vec![SubMesh {
+            name: "combined".into(),
+            vertices: verts.clone(),
+            indices: idx.clone(),
+            material_slot: Some(0),
+            skin: Vec::new(),
+        }],
+        vec!["one".into()],
+    );
+
+    let UvTileSplit::Split { tiles, submeshes } = mesh.split_uv_tiles() else {
+        panic!("a two-tile mesh did not split");
+    };
+    assert_eq!(tiles, vec![0, 1], "the tiles come back ascending");
+    assert_eq!(submeshes.len(), 2);
+    for (k, sub) in submeshes.iter().enumerate() {
+        assert_eq!(
+            sub.triangle_count(),
+            2,
+            "section {k} lost or gained triangles"
+        );
+        assert_eq!(
+            sub.vertex_count(),
+            4,
+            "section {k} carries the other tile's vertices"
+        );
+        assert_eq!(sub.material_slot, Some(k as u32));
+        for v in &sub.vertices {
+            assert!(
+                (0.0..1.0).contains(&v.uv[0]),
+                "section {k} kept a uv of {} — a section whose uv is not in its own \
+                 atlas is the defect this splits for",
+                v.uv[0]
+            );
+        }
+    }
+    assert_eq!(
+        submeshes.iter().map(|s| s.triangle_count()).sum::<usize>(),
+        mesh.submeshes[0].triangle_count(),
+        "the split is a partition, not a rewrite"
+    );
+
+    // …and the split drives the section table the pass draws from.
+    let mut split = mesh.clone();
+    split.submeshes = submeshes;
+    split.material_slots = vec!["face".into(), "body".into()];
+    assert_eq!(
+        split.skinned_sections(),
+        vec![(0, 6, 0), (6, 6, 1)],
+        "the split mesh draws one range per tile"
+    );
+
+    // A triangle with vertices in two tiles cannot belong to either.
+    let mut torn = mesh.clone();
+    // vertex 2 is shared by BOTH triangles of the first quad, so both tear.
+    torn.submeshes[0].vertices[2].uv[0] += 1.0;
+    assert_eq!(
+        torn.split_uv_tiles(),
+        UvTileSplit::Straddling(2),
+        "a mesh whose triangles cross a tile boundary must REFUSE, not guess"
+    );
+
+    // One tile is an ordinary mesh.
+    let mut flat = mesh.clone();
+    for v in &mut flat.submeshes[0].vertices {
+        v.uv[0] = v.uv[0].fract();
+    }
+    assert_eq!(flat.split_uv_tiles(), UvTileSplit::NotNeeded);
+}
+
+/// **THE ISLAND'S HERO DRAWS ITS HEAD FROM A FACE ATLAS** (the audit's priority
+/// (a), on the content the island actually wears).
+///
+/// UE's combined body is a UDIM mesh and the wave imported it with its ONE
+/// declared slot bound to `MI_Body_Baked` — a body atlas of torso, hands, feet
+/// and underwear with no face on it — so the head sampled the body's texture at
+/// the face's own coordinates and both MetaHumans stood on the island with blank
+/// heads (`CHAR1a3-FINAL/01c-editor-both-4x.png`, at 4×).
+///
+/// This asks the question of the committed bodies: two sections, the upper one
+/// bound to a DIFFERENT albedo from the lower one, every section's uv inside its
+/// own unit square, and the geometry split where a neck is.
+///
+/// **Local-only** and it SKIPS with a printed reason: the MetaHumans never enter
+/// this repository.
+#[test]
+fn the_islands_hero_draws_its_head_from_its_own_atlas() {
+    let Some(content) = island_project() else {
+        eprintln!("SKIP: no island project — the MetaHumans are local-only");
+        return;
+    };
+    let project =
+        inf_editor_core::assets::AssetProject::open(&content).expect("the island project indexes");
+    let store = inf_player::skinned::SkinnedRegistry::from_dir(&content);
+    for (label, base) in [("hero", 0xA0u128), ("street NPC", 0xB0)] {
+        let id = |n: u128| uuid::Uuid::from_u128(0x5C10_0000 + base + n);
+        let sm = inf_ecs::components::SkeletalMesh {
+            mesh: Some(id(2)),
+            skeleton: Some(id(0)),
+        };
+        let draw = store
+            .resolve_skinned(&sm, None, None, None)
+            .unwrap_or_else(|| panic!("{label}: the committed body draws nothing"));
+        assert_eq!(
+            draw.sections.len(),
+            2,
+            "{label} draws {} sections — a combined MetaHuman body carries TWO uv \
+             atlases and one section over both is a head wearing a torso",
+            draw.sections.len()
+        );
+        let mut albedos = Vec::new();
+        for (k, (first, count, mat)) in draw.sections.iter().enumerate() {
+            let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+            let (mut umin, mut umax) = (f32::MAX, f32::MIN);
+            for i in &draw.mesh.indices[*first as usize..(*first + *count) as usize] {
+                let v = &draw.mesh.vertices[*i as usize];
+                lo = lo.min(v.pos[1]);
+                hi = hi.max(v.pos[1]);
+                umin = umin.min(v.uv[0]);
+                umax = umax.max(v.uv[0]);
+            }
+            let mat = mat
+                .map(uuid::Uuid::from_u128)
+                .unwrap_or_else(|| panic!("{label}: section {k} names no material at all"));
+            let payload: inf_material::MaterialAsset = project
+                .load_payload(inf_asset::AssetId(mat))
+                .unwrap_or_else(|e| {
+                    panic!("{label}: section {k}'s material {mat} does not load ({e})")
+                });
+            println!(
+                "{label} section {k}: {} triangles, y {lo:.4}…{hi:.4}, u {umin:.4}…{umax:.4}, \
+                 albedo {:?}",
+                count / 3,
+                payload.base_color_texture
+            );
+            assert!(
+                (0.0..1.0).contains(&umin) && (0.0..1.0).contains(&umax),
+                "{label} section {k} samples u {umin:.4}…{umax:.4} — outside its own \
+                 atlas, so the uv was not rebased onto the tile it names"
+            );
+            albedos.push(payload.base_color_texture);
+        }
+        assert!(
+            albedos[0].is_some() && albedos[1].is_some(),
+            "{label}: a section binds a material with no albedo at all"
+        );
+        assert_ne!(
+            albedos[0], albedos[1],
+            "{label}: both sections sample ONE albedo — the head is wearing the \
+             body's atlas, which is the defect this wave's audit found"
+        );
+        // The split is where a neck is: the head section is the small one and it
+        // is entirely above the body section's floor.
+        let head = draw.sections[0].1 / 3;
+        let body = draw.sections[1].1 / 3;
+        assert!(
+            head < body,
+            "{label}: section 0 has {head} triangles against section 1's {body} — \
+             the face tile is the smaller half of a combined MetaHuman body"
+        );
+    }
+}
+
 // ── the fixture's own doors, mirrored from `island_gate` ─────────────────────
 
 fn loose_sim(content: &Path, slug: &str) -> inf_player::runtime_sim::RuntimeSim {
