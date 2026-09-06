@@ -629,7 +629,6 @@ fn the_committed_starter_body_is_high_poly_and_skinned_to_the_committed_rig() {
     );
 }
 
-
 // ── WAVE CHAR1a.2 ────────────────────────────────────────────────────────────
 //
 // Five more, on the five things the second half changed. Same rule as above:
@@ -667,7 +666,11 @@ fn the_preview_pose_is_the_machines_entry_clip_and_not_the_bind_pose() {
     reg.insert_skeleton(skel_id, skeleton.clone());
     reg.insert_clip(
         clip_id,
-        key_clip("Idle", 1, glam::Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)),
+        key_clip(
+            "Idle",
+            1,
+            glam::Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
+        ),
     );
     reg.insert_state_machine(
         sm_id,
@@ -791,7 +794,10 @@ fn one_triangle_skin() -> inf_render::SkinnedMeshData {
 #[test]
 fn the_skinned_instance_carries_blend_and_cutoff_from_the_material() {
     let hosts = [
-        ("the editor viewport", "editor/crates/inf-viewport/src/host.rs"),
+        (
+            "the editor viewport",
+            "editor/crates/inf-viewport/src/host.rs",
+        ),
         ("the shipped player", "runtime/inf-player/src/render.rs"),
     ];
     for (label, rel) in hosts {
@@ -829,11 +835,10 @@ fn the_skinned_instance_carries_blend_and_cutoff_from_the_material() {
         pass.contains("inst.blend as f32 * 4.0 + inst.cutoff.clamp(0.0, 1.0)"),
         "the skinned pass no longer packs blend/cutoff into `pbr.w`"
     );
-    let wgsl = std::fs::read_to_string(
-        repo().join("crates/inf-render/src/shaders/skinned_mesh.wgsl"),
-    )
-    .expect("the skinned shader")
-    .replace("\r\n", "\n");
+    let wgsl =
+        std::fs::read_to_string(repo().join("crates/inf-render/src/shaders/skinned_mesh.wgsl"))
+            .expect("the skinned shader")
+            .replace("\r\n", "\n");
     assert!(
         wgsl.contains("if (in.pbr.w > 0.5 && in.pbr.w < 1.5 && in.color.a < in.pbr.z)"),
         "the skinned fragment stage has no masked discard — a hair card draws solid"
@@ -857,10 +862,15 @@ fn the_skinned_instance_carries_blend_and_cutoff_from_the_material() {
 /// name-list assertion.
 #[test]
 fn the_female_committed_body_publishes_the_same_161_names() {
-    let male: inf_anim::SkeletonAsset = decode_committed("samples/starter-character/Starter.inf_skel");
+    let male: inf_anim::SkeletonAsset =
+        decode_committed("samples/starter-character/Starter.inf_skel");
     let female: inf_anim::SkeletonAsset =
         decode_committed("samples/starter-character-f/Starter_F.inf_skel");
-    assert_eq!(female.skeleton.len(), 161, "the female rig is not the mannequin's");
+    assert_eq!(
+        female.skeleton.len(),
+        161,
+        "the female rig is not the mannequin's"
+    );
     assert_eq!(
         names(&female.skeleton),
         names(&male.skeleton),
@@ -1000,8 +1010,7 @@ fn a_packed_ue_mask_swizzles_into_the_engines_orm_order() {
     let o = broadcast_channel(&aniso, occlusion);
     let r = broadcast_channel(&msr, roughness);
     let m = broadcast_channel(&msr, metallic);
-    let orm = inf_material::pack_orm(Some(&o), Some(&r), Some(&m), 1, 1)
-        .expect("one texel packs");
+    let orm = inf_material::pack_orm(Some(&o), Some(&r), Some(&m), 1, 1).expect("one texel packs");
     assert_eq!(
         (orm[0], orm[1], orm[2]),
         (244, 60, 200),
@@ -1080,10 +1089,157 @@ fn the_mannequin_material_parameters_map_to_one_role_each() {
         .nth(1)
         .expect("no kind_of_texture");
     let exact = f.find("if p in PARAM_KIND:").expect("no exact lookup");
-    let loose = f.find("for key, kind in PARAM_KIND.items():").expect("no fallback");
+    let loose = f
+        .find("for key, kind in PARAM_KIND.items():")
+        .expect("no fallback");
     assert!(
         exact < loose,
         "the substring fallback runs before the exact lookup — `BNormal` \
          classifies as `normal` again"
     );
+}
+
+/// **A COMMITTED BODY IS NOT NEAR-BLACK WHEN THE SUN IS ON IT** (CHAR1a
+/// carried 74) — the luminance floor, measured in a gate instead of on a
+/// screenshot.
+///
+/// # It is not the island, and it cannot be
+///
+/// CHAR1a measured p25 72.2 on the hero in a PIE frame of Vancouver Island and
+/// carried "fold the floor into the gate". Folding *that* measurement in is not
+/// a matter of cost: the island's content is gigabytes of licensed Megascans and
+/// Unreal mannequin under `island-build/`, outside this repository by law, so no
+/// CI leg can open it. Timed anyway, so the number is on the record rather than
+/// the excuse: building this scene and rendering it headless is **well under a
+/// second** on this machine (the whole 13-arm binary, this arm included, runs in
+/// about 1.6 s against 0.12 s without it) — the island's absence is the blocker,
+/// not the clock.
+///
+/// So the arm asks the same question of content CI HAS: the committed body, the
+/// committed rig, one sun, the renderer's own defaults. A character that renders
+/// near-black under a directional light is a character bug — a normal, a skin or
+/// a material — and that is exactly what FIX3's ledger says a low number now
+/// means, because the ambient term stopped being the suspect when the sky became
+/// the ambient.
+///
+/// Measured on the committed body: **4 255 body pixels, p25 165, median 179**,
+/// against a floor of 40.
+///
+/// **The mutation**: negate every vertex normal in the decoded body. The lit
+/// side faces away and the arm goes red at the floor. Verified — see the wave
+/// ledger for the number it fell to.
+#[test]
+fn a_committed_body_lit_by_one_sun_is_not_near_black() {
+    let Some(gpu) = gpu_or_skip() else {
+        eprintln!("SKIP: no GPU adapter for the luminance floor");
+        return;
+    };
+    let bytes = std::fs::read(repo().join("samples/starter-character/Starter_Body.inf_mesh"))
+        .expect("the committed body");
+    let mesh: inf_mesh::MeshAsset = inf_asset::decode(&bytes).expect("it decodes");
+    let skinned = inf_player::skinned::skinned_mesh_data(&mesh).expect("it has a skin stream");
+    let rig: inf_anim::SkeletonAsset = inf_asset::decode(
+        &std::fs::read(repo().join("samples/starter-character/Starter.inf_skel"))
+            .expect("the committed rig"),
+    )
+    .expect("it decodes");
+    let palette = std::sync::Arc::new(inf_anim::skinning_matrices(
+        &rig.skeleton,
+        &inf_anim::Pose::rest(&rig.skeleton),
+    ));
+
+    let mut scene = inf_render::RenderScene {
+        skinned_meshes: vec![std::sync::Arc::new(skinned)],
+        ..Default::default()
+    };
+    scene.skinned.push(inf_render::SkinnedInstance {
+        vt: Default::default(),
+        translation: glam::DVec3::ZERO,
+        rotation: glam::Quat::IDENTITY,
+        scale: glam::Vec3::ONE,
+        // The starter skin's own neutral, and NOT white: a body that only passes
+        // the floor because it is a mirror would not be a measurement of light.
+        color: [0.62, 0.55, 0.50, 1.0],
+        metallic: 0.0,
+        roughness: 0.6,
+        emissive: [0.0; 3],
+        id: 1,
+        mesh: 0,
+        blend: 0,
+        cutoff: 0.5,
+        palette,
+        shadow: inf_render::SkinnedShadow::BindSphere,
+    });
+    // One directional sun, over the camera's shoulder — the light every level in
+    // this engine starts with (`samples::blank3d_scene`'s own).
+    scene.lights.push(inf_render::RenderLight {
+        kind: inf_render::LightKind::Directional,
+        direction: glam::Vec3::new(0.35, 0.8, 0.5).normalize(),
+        color: [1.0, 0.98, 0.94],
+        intensity: 3.0,
+        ..Default::default()
+    });
+    scene.mark_dirty();
+
+    let (w, h) = (256u32, 320u32);
+    let eye = glam::DVec3::new(0.0, 1.0, 2.6);
+    let at = glam::DVec3::new(0.0, 0.95, 0.0);
+    let view = inf_render::RenderView {
+        origin: inf_math::FloatingOrigin::new(glam::DVec3::ZERO),
+        eye_world: eye,
+        forward: (at - eye).as_vec3().normalize(),
+        up: glam::Vec3::Y,
+        fov_y: 60f32.to_radians(),
+        near: 0.05,
+        width: w,
+        height: h,
+        ortho: None,
+    };
+    let target = inf_render::HeadlessTarget::new(&gpu, w, h);
+    let mut renderer = inf_render::EngineRenderer::new(&gpu, inf_render::HEADLESS_FORMAT);
+    renderer.render(&gpu, &scene, &view, &target.view, (w, h));
+    let img = target.read_rgba(&gpu).expect("readback");
+
+    // The BODY's pixels, not the frame's: the background is the renderer's sky
+    // and averaging it in would answer a question about the sky. A body pixel is
+    // one whose red channel leads, which the blue-grey background's does not —
+    // the same predicate `golden_skinned_masked` had to learn.
+    let mut lum: Vec<u16> = img
+        .chunks(4)
+        .filter(|p| p[0] as i16 - p[2] as i16 > 8)
+        .map(|p| (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32) as u16)
+        .collect();
+    assert!(
+        lum.len() > 2_000,
+        "only {} body pixels — the body is not on screen and the floor below \
+         would be measuring nothing",
+        lum.len()
+    );
+    lum.sort_unstable();
+    let p25 = lum[lum.len() / 4];
+    let median = lum[lum.len() / 2];
+    eprintln!(
+        "committed body under one sun: {} px, p25 {p25}, median {median}",
+        lum.len()
+    );
+    assert!(
+        p25 as f64 > 40.0,
+        "the committed body's p25 luminance is {p25} — the floor is 40, and \
+         below it a character reads as a silhouette. Since FIX3 made the sky the \
+         ambient term, a dark body is a CHARACTER bug (normals, skin weights or \
+         the material), not a lighting one"
+    );
+}
+
+/// A GPU context, or `None` on a machine (or a CI leg) with no adapter — the
+/// same door `inf-render`'s goldens take, so a headless leg skips rather than
+/// fails.
+fn gpu_or_skip() -> Option<inf_render::GpuContext> {
+    match inf_render::GpuContext::headless() {
+        Ok(gpu) => Some(gpu),
+        Err(e) => {
+            eprintln!("SKIP: no GPU adapter ({e})");
+            None
+        }
+    }
 }
