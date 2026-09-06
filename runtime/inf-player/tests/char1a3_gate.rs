@@ -1005,6 +1005,71 @@ fn a_udim_mesh_splits_into_one_section_per_tile() {
         v.uv[0] = v.uv[0].fract();
     }
     assert_eq!(flat.split_uv_tiles(), UvTileSplit::NotNeeded);
+
+    // **THE SHAPE THAT BROKE THE FIRST CUT** (the same audit, one measurement
+    // later). UE's combined body exports LOD 0 as one primitive spanning both
+    // tiles and LOD 1 as TWO — a big one spanning both tiles plus a small mouth
+    // bag inside tile 1001. A splitter that only touched SINGLE-primitive meshes
+    // left LOD 1 alone, and its two sections were then bound slot-for-slot
+    // against a slot list that means TILES: the head's atlas went onto a whole
+    // body at every distance the crowd draws.
+    let mut two = mesh.clone();
+    let extra = SubMesh {
+        name: "mouth".into(),
+        vertices: (0..3)
+            .map(|k| MeshVertex {
+                position: [0.5, 1.6, k as f32],
+                normal: [0.0, 0.0, 1.0],
+                uv: [0.4, 0.4],
+                tangent: inf_mesh::TANGENT_PLACEHOLDER,
+            })
+            .collect(),
+        indices: vec![0, 1, 2],
+        material_slot: Some(1),
+        skin: Vec::new(),
+    };
+    two.submeshes.push(extra);
+    let UvTileSplit::Split { tiles, submeshes } = two.split_uv_tiles() else {
+        panic!("a mesh whose FIRST submesh spans two tiles did not split");
+    };
+    assert_eq!(tiles, vec![0, 1]);
+    assert_eq!(
+        submeshes.iter().map(|s| s.triangle_count()).sum::<usize>(),
+        5,
+        "the whole mesh is re-sectioned by tile — 2 + 2 quad triangles and the          mouth bag, which belongs to tile 1001 with the face"
+    );
+    assert_eq!(
+        submeshes[0].triangle_count(),
+        3,
+        "the mouth bag did not join the tile its uv is in"
+    );
+
+    // …and a mesh whose submeshes each stay inside ONE tile is an author's own
+    // sectioning: left exactly alone even though the MESH spans two.
+    let mut sectioned = MeshAsset::new(
+        vec![
+            SubMesh {
+                material_slot: Some(0),
+                ..mesh.submeshes[0].clone()
+            },
+            SubMesh {
+                material_slot: Some(1),
+                ..mesh.submeshes[0].clone()
+            },
+        ],
+        vec!["a".into(), "b".into()],
+    );
+    for v in &mut sectioned.submeshes[0].vertices {
+        v.uv[0] = v.uv[0].fract();
+    }
+    for v in &mut sectioned.submeshes[1].vertices {
+        v.uv[0] = v.uv[0].fract() + 1.0;
+    }
+    assert_eq!(
+        sectioned.split_uv_tiles(),
+        UvTileSplit::NotNeeded,
+        "a mesh already sectioned one-atlas-per-submesh must not be re-sectioned"
+    );
 }
 
 /// **THE ISLAND'S HERO DRAWS ITS HEAD FROM A FACE ATLAS** (the audit's priority
@@ -1098,6 +1163,66 @@ fn the_islands_hero_draws_its_head_from_its_own_atlas() {
              the face tile is the smaller half of a combined MetaHuman body"
         );
     }
+
+    // **AND EVERY RUNG, not only the one the level names.** The LOD ladder is
+    // what the crowd draws at distance, and UE exports the combined body's rungs
+    // with a DIFFERENT section structure from LOD 0's — ONE primitive spanning
+    // both tiles at LOD 0, TWO at LOD 1 of which the big one spans both. A rule
+    // that only re-sectioned single-primitive meshes left those rungs bound
+    // slot-for-slot against sections that are not tiles, which puts the head's
+    // atlas on a whole body at every distance past 32 m. Measured off the
+    // exported glTF's own accessors; asserted here on the imported payloads.
+    let mut checked = 0usize;
+    let mut stack = vec![content.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|x| x.to_str()) != Some("inf_mesh") {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let Ok(m) = inf_asset::decode::<inf_mesh::MeshAsset>(&bytes) else {
+                continue;
+            };
+            if m.material_slot_assets.iter().flatten().count() < 2 {
+                continue;
+            }
+            checked += 1;
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            for (i, sub) in m.submeshes.iter().enumerate() {
+                let (lo, hi) = sub.vertices.iter().fold((f32::MAX, f32::MIN), |(a, b), v| {
+                    (a.min(v.uv[0]), b.max(v.uv[0]))
+                });
+                assert!(
+                    lo.floor() == hi.floor(),
+                    "{name} submesh {i} samples u {lo:.4}…{hi:.4} — it spans two uv \
+                     TILES under one material slot, which is one surface wearing \
+                     two atlases and cannot be drawn"
+                );
+                assert!(
+                    (0.0..1.0).contains(&lo) && (0.0..1.0).contains(&hi),
+                    "{name} submesh {i} samples u {lo:.4}…{hi:.4} — outside its own \
+                     atlas, so the uv was not rebased onto the tile it names"
+                );
+            }
+        }
+    }
+    println!("multi-slot meshes checked: {checked}");
+    assert!(
+        checked >= 6,
+        "only {checked} multi-slot meshes were walked — the two characters' three \
+         rungs each are six, and a walk that stopped finding them would go on \
+         passing"
+    );
 }
 
 /// **THE PIE PAYLOAD CARRIES A SKINNED MESH'S SLOT MATERIALS** (wave CHAR1a.3

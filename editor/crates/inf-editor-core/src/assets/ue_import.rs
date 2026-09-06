@@ -1282,6 +1282,7 @@ fn split_udim_sections(
     let Ok(mut asset) = project.load_payload::<inf_mesh::MeshAsset>(mesh) else {
         return;
     };
+    let before = asset.submeshes.len();
     let (tiles, submeshes) = match asset.split_uv_tiles() {
         inf_mesh::UvTileSplit::NotNeeded => return,
         inf_mesh::UvTileSplit::Straddling(n) => {
@@ -1345,7 +1346,7 @@ fn split_udim_sections(
         return;
     }
     report.advisories.push(format!(
-        "{}: the uv occupies {} tiles and the mesh is now one section per tile ({})",
+        "{}: {before} submesh(es) spanning {} uv tiles are now one section per tile ({})",
         sk.key,
         census.len(),
         census.join("; ")
