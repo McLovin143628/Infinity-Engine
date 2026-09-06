@@ -127,8 +127,20 @@ pub struct SkinnedDraw {
     /// material, which the PROJECTOR resolves into a surface and a virtual-texture
     /// set — a `VtTextureSet` is a warm-gated snapshot of a per-frame residency,
     /// and this value is cached for the life of the store.
-    pub sections: Arc<Vec<(u32, u32, Option<u128>)>>,
+    pub sections: SkinnedSections,
 }
+
+/// **One skinned mesh's drawn sections** (wave CHAR1a.3): `(first index, index
+/// count, material guid)` per material slot, EMPTY for a mesh whose submeshes
+/// all want one slot.
+///
+/// A named type rather than an inline tuple because the map it keys is a
+/// `Mutex<HashMap<_, Arc<Vec<_>>>>` on one side of the mirror, which is exactly
+/// the shape `clippy::type_complexity` exists to stop — the same reason
+/// `RestPaletteKey` next to it has a name.
+///
+/// **MIRROR**: keep byte-identical with the other host's.
+type SkinnedSections = Arc<Vec<(u32, u32, Option<u128>)>>;
 
 /// The key a shared palette is cached under: `(mesh, skeleton, entry clip)`.
 ///
@@ -206,7 +218,7 @@ pub struct SkinnedRegistry {
     /// Keyed by the MESH alone, exactly like the geometry cache beside it and for
     /// the same reason: the ranges and the slot materials are properties of the
     /// `.inf_mesh`, not of the rig it is played on.
-    sections: Mutex<HashMap<Uuid, Arc<Vec<(u32, u32, Option<u128>)>>>>,
+    sections: Mutex<HashMap<Uuid, SkinnedSections>>,
     rest_palettes: Mutex<HashMap<RestPaletteKey, Arc<Vec<Mat4>>>>,
 }
 
@@ -584,7 +596,7 @@ impl SkinnedRegistry {
     ///
     /// **MIRROR**: keep byte-identical with the other host's, doc block included
     /// (`projector_mirror.rs`).
-    fn skinned_sections(&self, mesh_id: Uuid) -> Arc<Vec<(u32, u32, Option<u128>)>> {
+    fn skinned_sections(&self, mesh_id: Uuid) -> SkinnedSections {
         if let Some(hit) = lock(&self.sections).get(&mesh_id) {
             return hit.clone();
         }

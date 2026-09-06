@@ -8299,6 +8299,16 @@ fn crowd_shadow(agent: Option<inf_ecs::crowd::CrowdAgent>) -> inf_render::Skinne
     }
 }
 
+/// **One material's surface, as `inf_render::skinned_sections` takes it**:
+/// `(colour, metallic, roughness, emissive, blend code, alpha cutoff)`.
+///
+/// A named type rather than an inline tuple for the reason
+/// `clippy::type_complexity` gives, and it is the shape the ONE Ring-0 door
+/// takes — so naming it here names it for both hosts' lookups.
+///
+/// **MIRROR**: keep byte-identical with the other host's.
+type DerivedSurface = ([f32; 4], f32, f32, [f32; 3], u8, f32);
+
 /// One derived material's surface, as `inf_render::skinned_sections` takes it.
 ///
 /// The colour, the three PBR terms, the blend CODE (`0` opaque, `1` masked, `2`
@@ -8317,7 +8327,7 @@ fn crowd_shadow(agent: Option<inf_ecs::crowd::CrowdAgent>) -> inf_render::Skinne
 fn derived_surface(
     materials: &std::collections::BTreeMap<u128, inf_asset::DerivedMaterial>,
     guid: u128,
-) -> Option<([f32; 4], f32, f32, [f32; 3], u8, f32)> {
+) -> Option<DerivedSurface> {
     let m = materials.get(&guid)?;
     Some((
         m.base_color,

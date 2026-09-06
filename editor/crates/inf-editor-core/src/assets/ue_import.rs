@@ -523,7 +523,8 @@ pub fn import_manifest(
         // place a `.inf_tex`'s provenance is known, since a texture record has no
         // pack of its own.
         report.asset_packs.push((id, mat.pack.clone()));
-        for t in report.textures[before..].to_vec() {
+        let fresh: Vec<AssetId> = report.textures[before..].to_vec();
+        for t in fresh {
             report.asset_packs.push((t, mat.pack.clone()));
         }
         if let Some(stem) = stem {
@@ -1405,6 +1406,11 @@ fn record_character_ladder(
 /// mesh at the hero's mesh GUID with the old rig still at the hero's skeleton
 /// GUID is 92 000 triangles addressed to the wrong joints, which draws as an
 /// explosion and is worse than the low-poly body it replaced.
+// Nine, and every one of them is a distinct fact this function cannot derive: the
+// body, its rig, the manifest record, the material map, WHICH committed identity
+// it becomes, that identity's three asset stems and its three clip stems. A
+// struct here would be a struct with one caller per field.
+#[allow(clippy::too_many_arguments)]
 fn rebind_character(
     project: &mut AssetProject,
     mesh: AssetId,

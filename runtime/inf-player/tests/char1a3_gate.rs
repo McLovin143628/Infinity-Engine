@@ -133,7 +133,7 @@ fn a_crowd_agents_hand_leaves_the_bind_pose() {
     let mut rows: Vec<(uuid::Uuid, String, f32, bool)> = Vec::new();
     {
         let w = sim.world();
-        for (guid, _) in &pop {
+        for guid in pop.keys() {
             let agent = w.world().iter_entities().find_map(|e| {
                 let g = e.get::<inf_ecs::Guid>()?;
                 (g.0 == *guid).then(|| e.get::<inf_ecs::crowd::CrowdAgent>().copied())?
