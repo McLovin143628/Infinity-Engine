@@ -35122,7 +35122,20 @@ name match over the exported set:
 | **throwing** | **NONE** | — |
 | **swimming** | **NONE** | — |
 | **prone** | **NONE** | — |
-| **cover / vault / climb** | **NONE** | — |
+| **mantle (ledge climb)** | **13** | `MantleComponent` (a Blueprint component), `ALS_N_Mantle_{1m_LH,1m_RH,2m}`, six montages, `Mantle_{1m,2m,Timeline}` curves |
+| **cover** | **NONE** | — |
+| **vault** | **NONE** | — |
+| **climb** | **NONE under that name** | ALS spells it `mantle` — see the row above |
+
+**Corrected at wave CHAR1a.3 (carried item 100).** This table read
+*"cover / vault / climb — NONE"* in one row. That is literally true of the word
+`climb` and it reads as more absent than it is: ALS ships ledge climbing under
+the name **mantle**, and it ships thirteen assets of it including a dedicated
+`MantleComponent`, two heights, six montages and three curves. A wave asking
+"can this character get over a wall?" would have read the old row and concluded
+no. The census is now DERIVED into the manifest (`movement_sets`, a keyword sweep
+over every inventory row rather than a hand-maintained table) so the next
+correction is a measurement rather than an edit.
 
 So four of the sets the mandate names — **slide, throwing, swimming and prone** —
 **do not exist in ALS-Community at all**, and neither do the cover and vault sets

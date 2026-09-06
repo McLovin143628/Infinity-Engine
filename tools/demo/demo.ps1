@@ -26,7 +26,16 @@ param(
     # **How long the EDITOR is given to finish streaming** before the frame a
     # claim about the editor is made on. CHAR1a photographed the viewport at
     # 27/52 and could not tell an unresolved material from a dropped one.
-    [int]$EditorSettleS = 45,
+    #
+    # **90 since wave CHAR1a.3, and it is a measurement.** On a project whose
+    # derived assets are COLD -- the first run after `inf island build`, which is
+    # exactly the run a wave takes its frames on -- 45 s left the editor still
+    # populating (52/52 arrived at +65 s), the Play click landed on a busy main
+    # thread, the button never changed out of "Play" and the loop reported
+    # "NO PLAYER after 240 s". Measured twice: the identical run at 90 s reached
+    # Play in 6 s and the hero moved 17.5 m. The failure looks like a broken Play
+    # button and is a stopwatch.
+    [int]$EditorSettleS = 90,
     # Place the second committed body beside the pawn before the editor frame,
     # in the DOCUMENT only. See tools/demo/place.mjs for why it is not saved.
     [bool]$PlaceFemale = $true

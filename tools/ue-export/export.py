@@ -1384,6 +1384,68 @@ def run_characters():
 #
 # Nothing here is exported. The row is the point.
 
+# ── the MOVEMENT-SET census (wave CHAR1a.3, carried item 100) ────────────────
+#
+# CHAR1a.2's catalogue asked "which of the mandate's named sets exist" and
+# answered by keyword over the ASSET NAMES, in a table written by hand. One row
+# read **"cover / vault / climb — NONE"**, and it is literally true and reads as
+# more absent than it is: ALS ships ledge climbing under the name **mantle** —
+# 13 assets including a dedicated `MantleComponent`, two heights, six montages
+# and three curves. A wave looking for "can this character get over a wall?"
+# would have read that row and concluded no.
+#
+# So the census is DERIVED here, into the manifest, by the same keyword sweep the
+# hand table used — over every inventory row, not only the sequences, so a
+# component and a curve count. It is a measurement rather than a table somebody
+# maintains, and it names the alias where there is one.
+
+MOVEMENT_SETS = [
+    ("walk", [r"(?i)_walk"], None),
+    ("run", [r"(?i)_run"], None),
+    ("sprint", [r"(?i)sprint"], None),
+    ("crouch", [r"(?i)(_CLF_|_CRF_|crouch)"], None),
+    ("jump", [r"(?i)jump"], None),
+    ("in-air / fall", [r"(?i)(fall|inair|in_air)"], None),
+    ("land", [r"(?i)_land"], None),
+    ("roll", [r"(?i)roll"], None),
+    ("turn in place", [r"(?i)turnip"], None),
+    ("stops / starts", [r"(?i)(_stop_|accel)"], None),
+    ("look / aim sweeps", [r"(?i)(look_|aim_sweep)"], None),
+    ("ragdoll / get-up", [r"(?i)(flail|getup|ragdoll)"], None),
+    ("stance variations", [r"(?i)stancevariation"], None),
+    ("weapon overlays", [r"(?i)(pistol|m4a1|_bow|binocular|torch|barrel|_box)"], None),
+    # **The row carried item 100 is about.**
+    ("mantle (ledge climb)", [r"(?i)mantle"], "the alias ALS uses for CLIMB"),
+    ("cover", [r"(?i)cover"], None),
+    ("vault", [r"(?i)vault"], None),
+    ("climb", [r"(?i)climb"], "ALS spells this `mantle` -- see that row"),
+    ("slide", [r"(?i)slide"], None),
+    ("throwing", [r"(?i)throw"], None),
+    ("swimming", [r"(?i)swim"], None),
+    ("prone", [r"(?i)prone"], None),
+]
+
+
+def movement_sets():
+    """Which named movement sets the swept packs ship, counted off the inventory."""
+    rows = []
+    for name, pats, note in MOVEMENT_SETS:
+        hits = []
+        for rec in INVENTORY.values():
+            asset = rec.get("key", "")
+            if any(re.search(p, asset) for p in pats):
+                hits.append({"asset": asset, "class": rec.get("class")})
+        hits.sort(key=lambda h: h["asset"])
+        rows.append({
+            "set": name,
+            "count": len(hits),
+            "classes": sorted({h["class"] for h in hits}),
+            "note": note,
+            "examples": [h["asset"].split("_")[-1] for h in hits[:4]],
+        })
+    return rows
+
+
 INVENTORY = {}   # object path -> record
 
 ENGINE_MAPPING = {
@@ -1561,6 +1623,10 @@ def run():
         # CHAR1b's mapping table; the importer ignores it (every manifest field
         # is `#[serde(default)]`), so it is additive within schema v2.
         "inventory": sorted(INVENTORY.values(), key=lambda r: r["key"]),
+        # Wave CHAR1a.3 (carried 100): which named movement sets the swept packs
+        # ship, DERIVED from the inventory rather than tabulated by hand. Additive
+        # within schema v2; the importer ignores it.
+        "movement_sets": movement_sets(),
         "materials": sorted(MATERIALS.values(), key=lambda r: r["key"]),
         "fixtures": sorted(FIXTURES.values(), key=lambda r: r["key"]),
         "textures": sorted(TEXTURES.values(), key=lambda r: r["key"]),
