@@ -116,8 +116,19 @@ def launch(uproject, log):
     reached its window. A detached editor cannot start its own compile workers, and
     the failure is silent — it looks exactly like the commandlet hang wave CHAR1a
     recorded, which is why it is written down here rather than remembered.
+
+    **`-noxgeshadercompile`, and it was PROSE and not a flag until the CHAR1a
+    audit.** The wave measured the third boot behaviour and wrote it into its
+    ledger — *"`-noxgeshadercompile` -> MainWindowTitle in ~90 s, 267 s of
+    CPU"* — and then did not put the token in this argv, so the tool as
+    committed still selected the XGE (IncrediBuild) controller
+    (`LogShaderCompilers: Display: Using XGE Controller for shader compilation`),
+    which never dispatches on this machine and which the editor waits for for
+    ever with no error. Carried item 90 says this flag *is* in `mh_remote.py`;
+    it was not, and a grep for it over the whole repository found two hits, both
+    in the memo's prose. It is here now.
     """
-    argv = [EDITOR, uproject, "-nosplash", "-nop4",
+    argv = [EDITOR, uproject, "-nosplash", "-nop4", "-noxgeshadercompile",
             "-abslog=" + os.path.abspath(log)]
     say("LAUNCH", " ".join(argv))
     return subprocess.Popen(argv)

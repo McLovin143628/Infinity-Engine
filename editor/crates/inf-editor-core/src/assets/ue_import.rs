@@ -1509,6 +1509,30 @@ pub fn broadcast_channel(rgba: &[u8], channel: usize) -> Vec<u8> {
 /// The keys are full object paths with the separators flattened and are up to
 /// 150 characters long; a Content Drawer full of those is unusable. The last two
 /// path-ish segments are what a human recognises.
+///
+/// # The digest, and the silent overwrite it closes (wave CHAR1a audit)
+///
+/// The tail alone is **not unique**, and the first content that proved it was
+/// the pair of MetaHumans wave CHAR1a.2 imported. Their material keys are
+///
+/// ```text
+/// INF_Built_INF_Dominic_Body_Materials_MI_Body_Baked_MI_Body_Baked
+/// INF_Built_INF_Vivian_Body_Materials_MI_Body_Baked_MI_Body_Baked
+/// ```
+///
+/// — identical in their last six segments, because the character's name sits at
+/// index 3 and the tail always drops it. The texture writer's path is
+/// deliberately DETERMINISTIC (`dest.join(format!("{name}_{slot}.inf_tex"))`, so
+/// a re-import overwrites its own output instead of writing `X_1.inf_tex`), so
+/// the second character's maps overwrote the first's. Measured on the wave's own
+/// import: 32 textures were written and **16 files** exist on disk, every
+/// surviving sidecar recording a Vivian source and not one recording Dominic's.
+/// Nothing raised an advisory, because from each material's point of view the
+/// write succeeded.
+///
+/// So the name carries a four-hex-digit digest of the WHOLE key. It is still
+/// deterministic — the same key gives the same name for ever, which is what the
+/// overwrite rule needs — and two keys that differ anywhere now differ here.
 fn short_name(key: &str) -> String {
     let parts: Vec<&str> = key.split('_').collect();
     let tail = if parts.len() > 6 {
@@ -1516,9 +1540,19 @@ fn short_name(key: &str) -> String {
     } else {
         key.to_string()
     };
-    tail.chars()
+    let clean: String = tail
+        .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect()
+        .collect();
+    // FNV-1a over the full key, 16 bits of it. Written out rather than pulled
+    // from a hasher crate: this is a NAME, and a name whose bytes depend on a
+    // dependency's default hasher is a name that can move under a `cargo update`.
+    let mut h: u32 = 0x811c_9dc5;
+    for b in key.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("{clean}_{:04x}", (h ^ (h >> 16)) & 0xffff)
 }
 
 impl Material {
@@ -1527,5 +1561,43 @@ impl Material {
     /// bridge — so it is the UE object path, which is what a human would look up.
     fn source_note(&self) -> String {
         format!("ue:{}", self.key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **TWO CHARACTERS' MATERIALS ARE TWO NAMES** (wave CHAR1a audit).
+    ///
+    /// The two MetaHuman body materials wave CHAR1a.2 imported differ only in
+    /// their fourth underscore segment, which `short_name`'s six-segment tail
+    /// always drops — so both resolved to `MI_Body_Baked_MI_Body_Baked`, and the
+    /// texture writer's deterministic path (which exists so a re-import
+    /// overwrites its own output) made the second character's maps overwrite the
+    /// first's. Measured on the wave's own import: 32 textures written, **16
+    /// files** on disk, every survivor recording a Vivian source.
+    ///
+    /// **The mutation**: drop the digest from `short_name`. `a == b` and the
+    /// first assertion fails with both names printed. Verified.
+    #[test]
+    fn two_characters_materials_do_not_shorten_to_one_name() {
+        let a = short_name("INF_Built_INF_Dominic_Body_Materials_MI_Body_Baked_MI_Body_Baked");
+        let b = short_name("INF_Built_INF_Vivian_Body_Materials_MI_Body_Baked_MI_Body_Baked");
+        assert_ne!(
+            a, b,
+            "two characters' body materials shorten to one asset name, so the \
+             second import silently overwrites the first's textures"
+        );
+        // …and the readable part survives, because a Content Drawer full of
+        // digests is the problem this function exists to avoid.
+        assert!(a.starts_with("MI_Body_Baked_MI_Body_Baked_"), "{a}");
+        assert!(b.starts_with("MI_Body_Baked_MI_Body_Baked_"), "{b}");
+        // …and it is DETERMINISTIC, which is what the overwrite rule needs: the
+        // same key names the same file on every run, on every machine.
+        assert_eq!(
+            a,
+            short_name("INF_Built_INF_Dominic_Body_Materials_MI_Body_Baked_MI_Body_Baked")
+        );
     }
 }

@@ -125,3 +125,17 @@
 # Measured, not anticipated: stashing the freshly written layer and popping it
 # put 8 268 carriage returns into it.
 *.geojson text eol=lf
+
+# PowerShell and ESM join the list at the wave CHAR1a audit, and the trigger was
+# a commit warning rather than a theory: with `core.autocrlf = true` — which is
+# this machine's setting — `git commit` printed *"in the working copy of
+# 'tools/demo/demo.ps1', LF will be replaced by CRLF the next time Git touches
+# it"* for both `tools/demo/demo.ps1` and `tools/demo/place.mjs`, because neither
+# extension had a rule and neither is `text=auto`-declared. They are LF today
+# only because they were written locally. `place.mjs` is a **new** file, so the
+# next fresh Windows clone would have been the first to see CRLF in it, and the
+# CRLF law has already been caught four times in this repository by exactly that
+# route. Same fix, same reason as the `.py` block above.
+*.ps1 text eol=lf
+*.mjs text eol=lf
+*.cmd text eol=lf
