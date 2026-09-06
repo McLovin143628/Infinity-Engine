@@ -299,6 +299,17 @@ public class InfInput {
 #    measured, and it is why this wave's first new-window run reported 0.000 m
 #    with the editor's own Outliner showing `Selected 1`. So the click goes to
 #    the player's own rectangle when it has one.
+# **The assembly is loaded HERE and not only in the fallback branch** (wave
+# CHAR1a audit). `Add-Type -AssemblyName System.Windows.Forms` was inside the
+# "CDP failed, click Play by coordinate" branch, which a successful CDP press
+# never reaches — so on the path this script normally takes the type was
+# unknown, `$screen` was `$null`, and the click that hands an EMBEDDED player
+# its keyboard went to `[int]$null, [int]$null` = **(0, 0)**, the top-left
+# corner of the screen. Measured: "Unable to find type
+# [System.Windows.Forms.Screen]" in the run's own output, followed by a click
+# at the origin. The run still moved 17.338 m because the player already had
+# the foreground — which is exactly how a defect like this survives.
+Add-Type -AssemblyName System.Windows.Forms
 $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 $target = New-Object InfInput+RECT
 #    "Has the player a window of its own" is THREE questions, not one, and the
