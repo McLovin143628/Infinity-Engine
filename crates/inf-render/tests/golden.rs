@@ -2194,6 +2194,158 @@ fn golden_skinned_masked() {
     );
 }
 
+/// **A SKINNED BODY WEARS MORE THAN ONE MATERIAL** (wave CHAR1a.3).
+///
+/// # The claim
+///
+/// One skinned mesh, one palette, **two material SECTIONS** — the left half of
+/// the strip in one surface and the right half in another — drawn as two ranges
+/// of one index buffer from one instance. Until this wave the skinned pass drew
+/// ONE material per mesh however many the asset named: measured on the real
+/// content this wave imported, `SKM_Manny` ships **two** material slots and a
+/// MetaHuman face **twelve**, and every one of them was drawn with slot 0's.
+///
+/// # What makes it non-vacuous
+///
+/// Three things, and the golden is only the third:
+///
+///  1. the two sections are **counted in the image**, by their own hues — a warm
+///     orange and a cold blue, chosen so neither can be confused with the
+///     blue-grey sky or the grid, and asserted to BOTH be present. A pass that
+///     drew section 0 over the whole buffer would show one hue;
+///  2. the plan is asserted to be **two draws over one palette block** — the
+///     sections share the instance's atlas entry, which is the cost model this
+///     feature is allowed under (sections cost draws and instance rows, never
+///     palette bytes);
+///  3. the frame is a committed golden, so the RANGES cannot silently swap.
+///
+/// # And the control that says the change is confined
+///
+/// The same fixture with `sections: Vec::new()` — the shape every committed
+/// character in this tree has — is rendered too, and its plan is asserted to be
+/// ONE draw with `range: None`. That is the assertion behind "the two skinned
+/// goldens are sha256-identical": an unsectioned instance emits the command it
+/// always emitted.
+#[test]
+fn golden_skinned_sections() {
+    let Some(gpu) = gpu_or_skip() else { return };
+    let (sk, clip, _) = skinned_cylinder();
+    let mesh = std::sync::Arc::new(two_cards());
+    let palette = palette_at(&sk, &clip, 0.0);
+
+    // Six indices a side: the fixture is two quads and the ranges are their two
+    // index runs, exactly as `MeshAsset::skinned_sections` derives them from two
+    // submeshes wanting two slots.
+    let warm = inf_render::SkinnedSection {
+        first_index: 0,
+        index_count: 6,
+        color: [0.92, 0.45, 0.12, 1.0],
+        metallic: 0.0,
+        roughness: 0.55,
+        emissive: [0.0; 3],
+        blend: 0,
+        cutoff: 0.5,
+        vt: Default::default(),
+    };
+    let cold = inf_render::SkinnedSection {
+        first_index: 6,
+        index_count: 6,
+        color: [0.10, 0.32, 0.88, 1.0],
+        ..warm.clone()
+    };
+    let body = |sections: Vec<inf_render::SkinnedSection>| SkinnedInstance {
+        vt: Default::default(),
+        translation: DVec3::ZERO,
+        rotation: Quat::IDENTITY,
+        scale: Vec3::ONE,
+        // The INSTANCE's own colour is a mid grey that neither section uses, so
+        // a pixel of it in the frame is a section that did not take.
+        color: [0.50, 0.50, 0.50, 1.0],
+        metallic: 0.0,
+        roughness: 0.55,
+        emissive: [0.0; 3],
+        id: 1,
+        mesh: 0,
+        blend: 0,
+        cutoff: 0.5,
+        palette: palette.clone(),
+        shadow: inf_render::SkinnedShadow::BindSphere,
+        sections,
+    };
+    let scene = |sections: Vec<inf_render::SkinnedSection>| {
+        let mut s = RenderScene {
+            grid_enabled: true,
+            skinned_meshes: vec![mesh.clone()],
+            ..Default::default()
+        };
+        s.skinned.push(body(sections));
+        s.mark_dirty();
+        s
+    };
+
+    // ── the plan: two draws, ONE palette block ──────────────────────────────
+    let sectioned = scene(vec![warm.clone(), cold.clone()]);
+    let plan = inf_render::plan_skinned_batches(&sectioned);
+    assert_eq!(plan.runs.len(), 2, "a two-section body is not two draws");
+    assert_eq!(
+        plan.blocks, 1,
+        "the two sections took two palette blocks — they are ranges of ONE body \
+         deformed by ONE skeleton and must share the atlas entry"
+    );
+    assert_eq!(
+        plan.runs[0].range,
+        Some((0, 6)),
+        "the first run does not draw the first section's range"
+    );
+    assert_eq!(plan.runs[1].range, Some((6, 6)));
+
+    // ── the control: no sections, one draw, the whole buffer ────────────────
+    let plain = inf_render::plan_skinned_batches(&scene(Vec::new()));
+    assert_eq!(plain.runs.len(), 1);
+    assert_eq!(
+        plain.runs[0].range, None,
+        "an instance with no sections emits a RANGE — the command is no longer \
+         the one every committed skinned golden was blessed against"
+    );
+
+    let view = look_view(DVec3::new(0.0, 1.1, 3.0), DVec3::new(0.0, 1.05, 0.0));
+    let img = check_golden(&gpu, "skinned_sections", &sectioned, &view);
+
+    // ── the two surfaces are both in the frame ──────────────────────────────
+    let count = |img: &[u8], f: &dyn Fn(&[u8]) -> bool| img.chunks(4).filter(|p| f(p)).count();
+    let is_warm = |p: &[u8]| p[0] > 120 && p[0] as i16 - p[2] as i16 > 40;
+    let is_cold = |p: &[u8]| p[2] > 90 && p[2] as i16 - p[0] as i16 > 40;
+    let (w, c) = (count(&img, &is_warm), count(&img, &is_cold));
+    assert!(
+        w > 200 && c > 200,
+        "the two sections did not both draw: {w} warm pixels and {c} cold ones — \
+         a pass that drew section 0 over the whole buffer shows one hue"
+    );
+}
+
+/// Two side-by-side cards in ONE index buffer — the geometry
+/// [`golden_skinned_sections`] draws as two ranges.
+fn two_cards() -> SkinnedMeshData {
+    let (w, h) = (0.36f32, 0.9f32);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    for (side, x0) in [(0usize, -0.76f32), (1, 0.04)] {
+        let base = vertices.len() as u32;
+        for (dx, y) in [(0.0f32, 0.55f32), (w, 0.55), (w, 0.55 + h), (0.0, 0.55 + h)] {
+            vertices.push(SkinnedVertex {
+                pos: [x0 + dx, y, 0.0],
+                normal: [0.0, 0.0, 1.0],
+                uv: [dx / w, (y - 0.55) / h],
+                joints: [0, 0, 0, 0],
+                weights: [1.0, 0.0, 0.0, 0.0],
+            });
+        }
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        let _ = side;
+    }
+    SkinnedMeshData { vertices, indices }
+}
+
 /// ONE upright card, as a skinned mesh bound to the cylinder rig's joint 0 —
 /// the shape a hair groom has, at the size a golden can see.
 ///

@@ -563,6 +563,12 @@ pub fn import_manifest(
                 continue;
             }
             let out = super::import::import_file(project, &src, &dest)?;
+            // Everything the one importer door produced belongs to this pack —
+            // the mesh, and the skeleton, materials and textures a glTF carries
+            // inside it. Collected here because `import_file` is where the set is
+            // known, and because a licence stamped onto the mesh and not onto the
+            // rig it needs is a licence somebody will read half of.
+            let produced = out.produced.clone();
             report.advisories.extend(out.advisories);
             let Some(id) = out.primary else {
                 report
@@ -575,7 +581,9 @@ pub fn import_manifest(
                 .map(|m| m.triangle_count())
                 .unwrap_or(0);
             record_rungs(project, id, mesh, &mut report);
-            report.asset_packs.push((id, mesh.pack.clone()));
+            for a in dependency_closure(project, &[&[id][..], &produced].concat()) {
+                report.asset_packs.push((a, mesh.pack.clone()));
+            }
             report
                 .meshes
                 .push((mesh.key.clone(), id, mesh.lods.len(), tris));
@@ -617,6 +625,9 @@ pub fn import_manifest(
                     continue;
                 }
                 let out = super::import::import_file(project, &src, &dest)?;
+                // …and the same for a body: its rig, its baked materials and
+                // their textures all cross under the pack's licence.
+                let produced = out.produced.clone();
                 report.advisories.extend(out.advisories);
                 let Some(id) = out.primary else {
                     report
@@ -662,7 +673,9 @@ pub fn import_manifest(
                     .load_payload::<inf_mesh::MeshAsset>(id)
                     .map(|mesh| mesh.triangle_count())
                     .unwrap_or(0);
-                report.asset_packs.push((id, sk.pack.clone()));
+                for a in dependency_closure(project, &[&[id][..], &produced].concat()) {
+                    report.asset_packs.push((a, sk.pack.clone()));
+                }
                 // **THE SLOT TABLE** (wave CHAR1a.3, `.inf_mesh` v3). The
                 // manifest states this mesh's material slots as manifest KEYS and
                 // section 1 has already imported each of them, so this is the one
@@ -925,7 +938,20 @@ pub fn import_manifest(
 
     // **THE LICENCE, ON DISK** (carried 96). Last, because it stamps everything
     // the run produced and the run is now over.
-    let stamped = stamp_licences(project, &mut report);
+    let mut stamped = stamp_licences(project, &mut report);
+    let (swept, exact) = sweep_licences(project, &dest, &mut report);
+    stamped += swept;
+    if swept > 0 {
+        report.advisories.push(format!(
+            "{swept} asset(s) in {} were produced by the import and are the              dependency of nothing, so their licence is {} — see `sweep_licences`",
+            dest.display(),
+            if exact {
+                "this run's single pack"
+            } else {
+                "every pack this run imported, at the most conservative ship position"
+            }
+        ));
+    }
     if stamped > 0 {
         report.advisories.push(format!(
             "licence position written into {stamped} asset sidecar(s) on disk"
@@ -985,6 +1011,42 @@ pub fn clip_guid(key: &str) -> AssetId {
     AssetId(uuid::Uuid::from_bytes(bytes))
 }
 
+/// **Every asset reachable from `roots`**, dependencies included, to a depth of
+/// three.
+///
+/// The licence stamp needs the CLOSURE and not the products of one call: on a
+/// re-import the content-hash dedupe reuses the assets that are already there and
+/// `ImportOutput::produced` comes back EMPTY — the same fact `rebind_character`'s
+/// skeleton search already had to work around — so a stamp keyed on `produced`
+/// gets every asset on the first run and none on the second, which is the run
+/// somebody checks.
+///
+/// Three is the depth this content actually has: mesh → skeleton, mesh →
+/// material → texture. Bounded rather than transitive-until-fixpoint because a
+/// dependency graph read off disk is somebody else's bytes.
+fn dependency_closure(project: &AssetProject, roots: &[AssetId]) -> Vec<AssetId> {
+    let mut seen: std::collections::BTreeSet<AssetId> = roots.iter().copied().collect();
+    let mut frontier: Vec<AssetId> = roots.to_vec();
+    for _ in 0..3 {
+        let mut next: Vec<AssetId> = Vec::new();
+        for id in frontier.drain(..) {
+            let Some(e) = project.db().get(id) else {
+                continue;
+            };
+            for d in &e.sidecar.dependencies {
+                if seen.insert(*d) {
+                    next.push(*d);
+                }
+            }
+        }
+        frontier = next;
+        if frontier.is_empty() {
+            break;
+        }
+    }
+    seen.into_iter().collect()
+}
+
 /// The sidecar `import` keys the licence position is written to.
 ///
 /// Named once, here, because a gate reads them back: **carried item 96** was
@@ -1041,6 +1103,89 @@ fn stamp_licences(project: &mut AssetProject, report: &mut UeImportReport) -> us
             .push(format!("licence not recorded on disk for {f}"));
     }
     stamped
+}
+
+/// **The sweep**: anything in the destination folder this run wrote to that the
+/// per-asset pass did not reach.
+///
+/// # Why a sweep is needed at all
+///
+/// `import_file` produces more than it reports. A glTF carries its own materials,
+/// and a body's four LOD rungs each carry a copy of them, so a `Content/UE/...`
+/// folder ends up holding materials that are the product of an import and the
+/// dependency of nothing — measured: 345 of 441 sidecars were reached by the
+/// closure and **96** were not. An asset with no licence beside it is the state
+/// carried item 96 is about, and "most of them have one" is not the claim.
+///
+/// A run that imported ONE pack attributes them exactly. A run that imported
+/// several cannot — nothing on the asset says which — so the row names every
+/// candidate and the ship position is the CONSERVATIVE one: local-only if any of
+/// the packs is local-only, because the cost of getting that wrong in the shipping
+/// direction is a licence breach and in the other direction is a missing texture.
+fn sweep_licences(
+    project: &AssetProject,
+    dest: &Path,
+    report: &mut UeImportReport,
+) -> (usize, bool) {
+    if report.licences.is_empty() {
+        return (0, true);
+    }
+    let exact = report.licences.len() == 1;
+    let pack = if exact {
+        report.licences[0].0.clone()
+    } else {
+        format!(
+            "(unattributed: {})",
+            report
+                .licences
+                .iter()
+                .map(|(p, _, _)| p.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let licence = report
+        .licences
+        .iter()
+        .map(|(p, l, _)| {
+            if exact {
+                l.clone()
+            } else {
+                format!("{p}: {l}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("  ||  ");
+    let ship = report.licences.iter().all(|(_, _, s)| *s);
+    let _ = project;
+    let mut n = 0usize;
+    let Ok(entries) = std::fs::read_dir(dest) else {
+        return (0, exact);
+    };
+    for e in entries.flatten() {
+        let path = e.path();
+        if path.extension().is_none_or(|x| x != "toml") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if text.contains(LICENCE_PACK_KEY) {
+            continue;
+        }
+        let Ok(mut side) = inf_asset::AssetSidecar::load(&path.with_extension("")) else {
+            continue;
+        };
+        let mut t = side.import.take().unwrap_or_default();
+        t.insert(LICENCE_KEY.into(), licence.clone().into());
+        t.insert(LICENCE_SHIP_KEY.into(), ship.into());
+        t.insert(LICENCE_PACK_KEY.into(), pack.clone().into());
+        side.import = Some(t);
+        if side.save(&path.with_extension("")).is_ok() {
+            n += 1;
+        }
+    }
+    (n, exact)
 }
 
 /// The rung census, into the mesh's sidecar `import` table.

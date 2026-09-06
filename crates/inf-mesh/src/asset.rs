@@ -461,6 +461,17 @@ impl MeshAsset {
     }
 }
 
+/// **Encode a mesh at schema v2** — the ladder's own frozen record, exposed so a
+/// gate can write REAL v2 bytes rather than truncating a v3 encode.
+///
+/// A shape built by asking today's encoder what it emits pins nothing, because it
+/// moves whenever the encoder does; this goes through `mesh_v2::MeshAsset`, which
+/// says what v2 *was*. Test support in name and in fact — nothing in the engine
+/// writes a v2 payload any more.
+pub fn encode_v2_for_test(mesh: &MeshAsset) -> inf_asset::Result<Vec<u8>> {
+    inf_asset::encode_shape(&mesh_v2::MeshAsset::from_current(mesh))
+}
+
 impl AssetPayload for MeshAsset {
     const KIND: AssetKind = AssetKind::Mesh;
     const SCHEMA_VERSION: u32 = Self::CURRENT_VERSION;
@@ -569,7 +580,6 @@ pub(crate) mod mesh_v2 {
 
         /// The v2 projection of a current payload — the encoder half, so the arms
         /// can write real v2 bytes from a v3 value.
-        #[cfg_attr(not(test), allow(dead_code))]
         pub fn from_current(m: &super::MeshAsset) -> Self {
             Self {
                 schema_version: 2,

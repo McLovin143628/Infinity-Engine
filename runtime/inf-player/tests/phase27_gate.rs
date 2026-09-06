@@ -1266,7 +1266,9 @@ fn the_golden_set_is_pinned_and_additive_after_phase_27() {
     // cards alternating alpha against a 0.5 cutoff, four discarded), and
     // nothing was re-blessed -- the whole golden binary passes under
     // `INF_GOLDEN_STRICT=1` with the two existing skinned goldens unmoved.
-    const GOLDENS: usize = 63;
+    // Wave CHAR1a.3 added `skinned_sections.png` -- a two-section skinned body,
+    // the arm behind `.inf_mesh` v3's material-slot table. 63 -> 64.
+    const GOLDENS: usize = 64;
     /// `xxh3_128` over `"{file_name} {hex}\n"` for every golden, name-sorted.
     /// **RULE: this may change only in a commit that adds a golden, or in one
     /// whose stated purpose is to change what the engine LOOKS like.**
@@ -1456,7 +1458,10 @@ fn the_golden_set_is_pinned_and_additive_after_phase_27() {
     // `SkinnedInstance::blend` exists to draw. Nothing was re-blessed — the
     // whole golden binary passes under `INF_GOLDEN_STRICT=1` and
     // `git status crates/inf-render/tests/goldens/` listed exactly one new file.
-    const GOLDEN_SET_DIGEST: &str = "2f0b00bc595a72b9228a1814720419db";
+    // Wave CHAR1a.3: `skinned_sections.png` joined the set (63 -> 64) and no
+    // existing frame moved -- the whole 124-scene suite runs green under
+    // `INF_GOLDEN_STRICT=1`, which is what says this digest moved by an ADDITION.
+    const GOLDEN_SET_DIGEST: &str = "596b82abb30b94e3b1e29928f0f8ddd5";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")

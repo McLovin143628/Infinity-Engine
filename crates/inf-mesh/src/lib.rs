@@ -23,7 +23,9 @@ pub mod obj_import;
 pub mod optimize;
 pub mod validate;
 
-pub use asset::{Aabb, MeshAsset, MeshVertex, SubMesh, VertexSkin, TANGENT_PLACEHOLDER};
+pub use asset::{
+    encode_v2_for_test, Aabb, MeshAsset, MeshVertex, SubMesh, VertexSkin, TANGENT_PLACEHOLDER,
+};
 pub use error::MeshError;
 pub use fracture::{
     clamp_chunk_count, derived_fracture_id, fracture_mesh, ChunkSection, FractureAsset,

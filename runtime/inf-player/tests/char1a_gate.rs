@@ -466,7 +466,7 @@ fn nothing_from_unreal_is_inside_the_checkout() {
     // bridge writes under. A stem is matched against the FILE NAME, so a source
     // file that merely mentions one in a comment (this file, for instance) is
     // not a hit.
-    const UE_STEMS: [&str; 11] = [
+    const UE_STEMS: [&str; 18] = [
         "SKM_Manny",
         "SKM_Quinn",
         "SK_Mannequin",
@@ -475,6 +475,22 @@ fn nothing_from_unreal_is_inside_the_checkout() {
         "ALS_Mannequin_Skeleton",
         "MetaHumanCharacter",
         "ABP_Manny",
+        // **The METAHUMAN stems** (wave CHAR1a.3). CHAR1a.2 assembled two
+        // characters and CHAR1a.3 made them the island's defaults, so what the
+        // bridge now writes by the hundred-megabyte is `INF_Dominic` /
+        // `INF_Vivian` geometry and the pipeline's own baked maps — `T_Body_BC`,
+        // `T_Head_LOD1_N`, `T_Eye*`, `MI_Body_Baked`. They are MAY-SHIP content
+        // and they are still NEVER-COMMIT content: the licence permits use in
+        // any engine and says nothing about redistributing the source assets,
+        // which is exactly what a public repository would do.
+        "INF_Dominic",
+        "INF_Vivian",
+        "MI_Body_Baked",
+        "MI_Face_Skin_Baked",
+        "T_Body_",
+        "T_Head_LOD",
+        "T_Eye",
+        // …and the bridge's mannequin texture stems.
         // The bridge's texture stems (wave CHAR1a audit): `T_Manny_*`,
         // `T_Quinn_*` and the UE logo mask are what `export.py` writes as PNG,
         // and a PNG is now scanned.
