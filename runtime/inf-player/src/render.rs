@@ -351,6 +351,7 @@ impl PlayerRenderHost {
             &mut self.debris_cache,
             self.renderer.vt_textures(),
             &self.scatter_meshes,
+            &self.materials.materials,
         );
     }
 
@@ -645,6 +646,11 @@ pub fn project_scene_with_skinned(
         // content. Every scattered instance falls back to its placeholder
         // primitive, which is exactly what it did before wave TER2b.
         &inf_render::ScatterMeshes::new(),
+        // …and no material records, for the same reason: a narrow door has no
+        // material store, so a sectioned body keeps its entity's own surface on
+        // every section. Unchanged for every caller, all of which carry
+        // one-slot content.
+        &std::collections::HashMap::new(),
     );
 }
 
@@ -663,6 +669,34 @@ pub fn project_scene_with_skinned(
 /// `VtTextureSet::NONE` and the surfaces render off their scalar attributes,
 /// exactly as they did before P26.
 #[allow(clippy::too_many_arguments)]
+/// One derived material's surface, as `inf_render::skinned_sections` takes it.
+///
+/// The colour, the three PBR terms, the blend CODE (`0` opaque, `1` masked, `2`
+/// translucent — `blend_code`'s own numbering, because a section is a surface and
+/// the fragment stage reading it is the same one) and the alpha cutoff. `None`
+/// for a GUID this host has no record for, which makes the section keep the
+/// entity's own surface rather than draw in the renderer's neutral grey.
+///
+/// **MIRROR** of the viewport host's `derived_surface`, byte for byte.
+fn derived_surface(
+    materials: &std::collections::HashMap<uuid::Uuid, inf_asset::DerivedMaterial>,
+    guid: u128,
+) -> Option<([f32; 4], f32, f32, [f32; 3], u8, f32)> {
+    let m = materials.get(&uuid::Uuid::from_u128(guid))?;
+    Some((
+        m.base_color,
+        m.metallic,
+        m.roughness,
+        m.emissive,
+        match m.blend {
+            inf_asset::DerivedBlend::Masked => 1,
+            inf_asset::DerivedBlend::Translucent => 2,
+            _ => 0,
+        },
+        m.alpha_cutoff,
+    ))
+}
+
 pub fn project_scene_full(
     scene: &mut RenderScene,
     sim: &RuntimeSim,
@@ -673,7 +707,22 @@ pub fn project_scene_full(
     debris: &mut inf_render::DebrisCache,
     vt: Option<&inf_render::VtTextures>,
     scatter_meshes: &inf_render::ScatterMeshes,
+    // **The level's derived materials** (wave CHAR1a.3), keyed by the `.inf_mat`
+    // GUID a scene binds — the same map this host hands `build_vt_level`. TENTH
+    // and last rather than beside `vt`, which it most resembles, because
+    // appending is what the tail of this signature has always done and a reader
+    // comparing two call sites across a wave should not have to count.
+    //
+    // A skinned mesh's material SECTIONS need a surface per slot, and a slot is
+    // named by the `.inf_mesh` rather than by any component — so the projector
+    // has to be able to ask "what does this GUID draw as?" about a material no
+    // entity binds. It is the same question `Material.asset` asks, of the same
+    // store, one indirection further out.
+    materials: &std::collections::HashMap<uuid::Uuid, inf_asset::DerivedMaterial>,
 ) {
+    // The virtual-texture LIBRARY, bound under a name the entity walk does not
+    // shadow: inside it, `vt` is the SET one entity's material resolved to.
+    let vt_lib = vt;
     scene.instances.clear();
     scene.lights.clear();
     scene.sprites.clear();
@@ -1188,7 +1237,7 @@ pub fn project_scene_full(
                             scene.skinned_meshes.push(draw.mesh);
                             scene.skinned_meshes.len() - 1
                         });
-                        scene.skinned.push(SkinnedInstance {
+                        let inst = SkinnedInstance {
                             vt,
                             translation,
                             rotation: rot.as_quat(),
@@ -1203,7 +1252,25 @@ pub fn project_scene_full(
                             cutoff,
                             palette: draw.palette,
                             shadow,
-                        });
+                            sections: Vec::new(),
+                        };
+                        // **THE SECTIONS** (wave CHAR1a.3): one drawn range per
+                        // material slot the `.inf_mesh` names, each with that
+                        // slot's own surface and virtual textures, all sharing
+                        // this instance's palette. EMPTY for a one-slot body —
+                        // every committed character, every crowd agent, and the
+                        // MetaHuman full-body mesh — which then draws exactly the
+                        // one whole-buffer command it drew before sections
+                        // existed. Through `inf_render::skinned_sections`, which
+                        // is the ONE door: the rule is Ring 0's, the material
+                        // lookup is this host's.
+                        let sections = inf_render::skinned_sections(
+                            &draw.sections,
+                            &inst,
+                            |g| derived_surface(materials, g),
+                            |g| inf_render::vt_set_for(vt_lib, Some(g)),
+                        );
+                        scene.skinned.push(SkinnedInstance { sections, ..inst });
                     }
                     // Unbound (or unskinned) — the editor's placeholder, down to
                     // its slate tint, so the two hosts also agree about content
@@ -3217,6 +3284,7 @@ fn project_cloth(
         cutoff: 0.5,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
 }
 
@@ -3270,6 +3338,7 @@ fn project_hair(
         cutoff: 0.5,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
 }
 #[cfg(test)]

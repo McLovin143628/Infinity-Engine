@@ -264,6 +264,7 @@ fn a_metal_reflects_the_sky_and_the_skinned_path_reflects_the_same_sky() {
         cutoff: 0.5,
         palette: std::sync::Arc::new(vec![Mat4::IDENTITY]),
         shadow: Default::default(),
+        sections: Vec::new(),
     });
     skin.mark_dirty();
     let (skinned_p50, skinned_px) = body(&shot(&gpu, &skin, s), &empty);

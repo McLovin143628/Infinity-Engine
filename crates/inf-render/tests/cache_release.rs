@@ -376,6 +376,7 @@ fn gi_holds_only_the_content_the_scene_still_names() {
         mesh: 0,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
     scene.mark_dirty();
     renderer.render(&gpu, &scene, &view, &target.view, (W, H));
@@ -407,6 +408,7 @@ fn gi_holds_only_the_content_the_scene_still_names() {
         mesh: 0,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
     swapped.mark_dirty();
     renderer.render(&gpu, &swapped, &view, &target.view, (W, H));
@@ -459,6 +461,7 @@ fn gi_releases_its_caches_when_the_setting_goes_off() {
         mesh: 0,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
     scene.mark_dirty();
     renderer.render(&gpu, &scene, &view, &target.view, (W, H));

@@ -782,6 +782,7 @@ fn a_grammar_building_draws_in_three_distance_bands() {
         &mut debris,
         None,
         &meshes,
+        &std::collections::HashMap::new(),
     );
 
     let mut bands: BTreeMap<(u64, u64), (usize, usize)> = BTreeMap::new();

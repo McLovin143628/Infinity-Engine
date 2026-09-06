@@ -396,6 +396,16 @@ pub struct EngineHost {
     /// it — this file needs a window, so the P26.4 audit could only pin the
     /// early-out as source text.
     vt_level_key: inf_editor_core::render_assets::VtLevelKey,
+    /// **The derived material records the live VT level was built from** (wave
+    /// CHAR1a.3), keyed by `.inf_mat` GUID.
+    ///
+    /// Kept rather than dropped at the end of `sync_vt_bindings` because a
+    /// skinned mesh's material SECTIONS need a surface per slot, and a slot is
+    /// named by the `.inf_mesh` rather than by any component — so the projector
+    /// has to be able to ask "what does this GUID draw as?" about a material no
+    /// entity binds. MIRROR: `project_scene_full`'s `materials` parameter, which
+    /// the player fills from the identical map.
+    vt_material_records: std::collections::BTreeMap<u128, inf_asset::DerivedMaterial>,
     /// The last tool-rejection message, for a Ring-2 caller to surface. Drained by
     /// [`take_tool_status`](Self::take_tool_status).
     tool_status: Option<String>,
@@ -1140,6 +1150,7 @@ impl EngineHost {
             scatter_meshes: inf_render::ScatterMeshes::new(),
             scatter_wanted: Default::default(),
             vt_level_key: Default::default(),
+            vt_material_records: std::collections::BTreeMap::new(),
             tool_status: None,
             stream_log_countdown: STREAM_LOG_INTERVAL_FRAMES,
             sculpt_drag: None,
@@ -1219,6 +1230,7 @@ impl EngineHost {
     /// (`PlayerRenderHost::rebuild_vt` exists for exactly this case).
     fn reset_device_scoped_state(&mut self, view_mode: inf_render::ViewMode) {
         self.vt_level_key = Default::default();
+        self.vt_material_records.clear();
         self.applied_render = None;
         self.synced_version = None;
         self.render_tier = None;
@@ -1768,6 +1780,15 @@ impl EngineHost {
         // texture set is a lookup in it (P26.4). `None` on a level with no
         // bindings, and then every set below is `VtTextureSet::NONE`.
         let vt = self.renderer.vt_textures();
+        // The LIBRARY under a name the entity walk does not shadow (inside it,
+        // `vt` is the SET one entity's material resolved to), and the level's
+        // derived material records under a field borrow disjoint from
+        // `self.scene` — both for the skinned SECTIONS below, whose surfaces are
+        // named by the `.inf_mesh` rather than by any component.
+        //
+        // MIRROR: `project_scene_full`'s `vt_lib` and its `materials` parameter.
+        let vt_lib = vt;
+        let mats = &self.vt_material_records;
         let mut next_id: u32 = 1;
         // Which vgeom assets this projection has already listed (the render node
         // caches GPU geometry by id, but the asset list must not duplicate), and
@@ -2481,7 +2502,7 @@ impl EngineHost {
                                 self.scene.skinned_meshes.push(draw.mesh);
                                 self.scene.skinned_meshes.len() - 1
                             });
-                            self.scene.skinned.push(inf_render::SkinnedInstance {
+                            let inst = inf_render::SkinnedInstance {
                                 vt,
                                 translation,
                                 rotation: rot.as_quat(),
@@ -2496,7 +2517,28 @@ impl EngineHost {
                                 cutoff,
                                 palette: draw.palette,
                                 shadow,
-                            });
+                                sections: Vec::new(),
+                            };
+                            // **THE SECTIONS** (wave CHAR1a.3): one drawn range
+                            // per material slot the `.inf_mesh` names, each with
+                            // that slot's own surface and virtual textures, all
+                            // sharing this instance's palette. EMPTY for a
+                            // one-slot body — every committed character, every
+                            // crowd agent, and the MetaHuman full-body mesh —
+                            // which then draws exactly the one whole-buffer
+                            // command it drew before sections existed. Through
+                            // `inf_render::skinned_sections`, which is the ONE
+                            // door: the rule is Ring 0's, the material lookup is
+                            // this host's.
+                            let sections = inf_render::skinned_sections(
+                                &draw.sections,
+                                &inst,
+                                |g| derived_surface(mats, g),
+                                |g| inf_render::vt_set_for(vt_lib, Some(g)),
+                            );
+                            self.scene
+                                .skinned
+                                .push(inf_render::SkinnedInstance { sections, ..inst });
                         }
                         // Unbound (or unskinned) — the pre-P18.3 placeholder,
                         // unchanged down to its slate tint, so authoring a skeletal
@@ -5211,8 +5253,11 @@ impl EngineHost {
         let content = self.render_assets.material_content(key.bindings);
         if content.is_empty() {
             self.renderer.set_vt_level(None);
+            self.vt_material_records.clear();
             return;
         }
+        // Kept for the skinned SECTIONS — see the field.
+        self.vt_material_records = content.records.clone();
         // THE DOOR, and it is the player's: same materials, same order, same
         // pool-format ruling, same floor.
         // The budget is the TIER's (P26.5) — the same settings field the player
@@ -5248,6 +5293,48 @@ impl EngineHost {
                     report.refused
                 );
                 self.renderer.set_vt_level(Some((textures, pools)));
+                // **AND PROJECT ONCE MORE, BECAUSE NOTHING IS WARM YET**
+                // (wave CHAR1a.3, carried item 91).
+                //
+                // `inf_render::vt_set_for` is not a binding, it is a
+                // **warm-gated snapshot**: `VtTextures::set_for`'s `warm_slot`
+                // answers `0` for a texture whose pages the residency has not
+                // applied yet, and an instance that gets `0` falls back to its
+                // scalar `Material::base_color` for that map. The player
+                // survives that because `project_scene_full` runs **every
+                // frame** — its frame 0 is cold, its frame 1 is not, and
+                // `phase26_gate` records exactly that extra cold frame.
+                //
+                // This host does not. `sync_from_doc` is version-gated, and the
+                // one projection it does run is the projection that calls THIS
+                // function — the one that installs a **fresh** registry, three
+                // lines up, in which nothing can be warm. So every instance
+                // latched at `VtTextureSet::NONE`, `vt_stream::scene_coverage`
+                // then skipped it (an instance with no set contributes no
+                // coverage), no pages were ever wanted for it, and the surface
+                // drew off its base colour for the rest of the session.
+                //
+                // Measured at the CHAR1a audit, at `Streaming 52/52`, 45 s
+                // settled, with the binding present in the level's own bytes:
+                // editor hero p50 **194.0** / chroma 14.0 against PIE's p50
+                // **81.9** / chroma 12.8 for the same character.
+                //
+                // It is not a skinned defect and the fix is not on the skinned
+                // path: rigid and vgeom instances latch through the identical
+                // line. It *presents* as skinned because terrain re-resolves
+                // per frame outside the gate (`sync_streamed_terrain`) and a
+                // prop gets re-projected by the incidental version bumps of an
+                // editing session — selecting anything bumps the document —
+                // while a character that is merely looked at never gets a
+                // second projection.
+                //
+                // Clearing the latch asks `sync_from_doc` for one more
+                // projection on the next frame, by which time `render` has run
+                // `apply_wants` and the registry is warm. It cannot loop: the
+                // second projection re-enters here and returns at the
+                // `key == self.vt_level_key` early-out above, which is the same
+                // "force one more pass" idiom `sync_terrain_slot` already uses.
+                self.synced_version = None;
             }
             None => self.renderer.set_vt_level(None),
         }
@@ -8238,6 +8325,40 @@ fn crowd_shadow(agent: Option<inf_ecs::crowd::CrowdAgent>) -> inf_render::Skinne
 /// **MIRROR** of the other host's `project_cloth` — keep the two byte-identical,
 /// **this doc block included** (the P21.2 lesson: the mirror gate compares the
 /// comment too). Side-neutral wording on purpose.
+/// One derived material's surface, as `inf_render::skinned_sections` takes it.
+///
+/// The colour, the three PBR terms, the blend CODE (`0` opaque, `1` masked, `2`
+/// translucent — `blend_code`'s own numbering, because a section is a surface and
+/// the fragment stage reading it is the same one) and the alpha cutoff. `None`
+/// for a GUID this host has no record for, which makes the section keep the
+/// entity's own surface rather than draw in the renderer's neutral grey.
+///
+/// **MIRROR** of the player projector's `derived_surface` -- in RULE, not in
+/// spelling. The two hosts hold the same record under two containers (a
+/// `BTreeMap<u128, _>` here because that is what `EditorMaterialContent` is keyed
+/// by; a `HashMap<Uuid, _>` there because that is what `MaterialContent` is), and
+/// that asymmetry is the one `material_content`'s own doc states: the editor
+/// derives the record from a loose `.inf_mat`, the player reads the cooked
+/// `.inf_matd`. What must not differ is the six values and the blend NUMBERING.
+fn derived_surface(
+    materials: &std::collections::BTreeMap<u128, inf_asset::DerivedMaterial>,
+    guid: u128,
+) -> Option<([f32; 4], f32, f32, [f32; 3], u8, f32)> {
+    let m = materials.get(&guid)?;
+    Some((
+        m.base_color,
+        m.metallic,
+        m.roughness,
+        m.emissive,
+        match m.blend {
+            inf_asset::DerivedBlend::Masked => 1,
+            inf_asset::DerivedBlend::Translucent => 2,
+            _ => 0,
+        },
+        m.alpha_cutoff,
+    ))
+}
+
 fn project_cloth(
     scene: &mut inf_render::RenderScene,
     world: &inf_ecs::EcsWorld,
@@ -8275,6 +8396,7 @@ fn project_cloth(
         cutoff: 0.5,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
 }
 
@@ -8328,6 +8450,7 @@ fn project_hair(
         cutoff: 0.5,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
 }
 #[cfg(test)]

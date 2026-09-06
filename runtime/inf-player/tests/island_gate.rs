@@ -1594,6 +1594,7 @@ fn both_hosts_resolve_the_same_dag_for_every_mesh_the_island_draws() {
             &mut inf_render::DebrisCache::default(),
             None,
             &inf_render::ScatterMeshes::new(),
+            &std::collections::HashMap::new(),
         );
         (scene.vgeom_instances.len(), scene.instances.len())
     };
@@ -2481,6 +2482,7 @@ fn the_scattered_cover_draws_its_authored_meshes() {
             &mut inf_render::DebrisCache::default(),
             None,
             table,
+            &std::collections::HashMap::new(),
         );
         scene
     };
@@ -7646,6 +7648,7 @@ fn pie_equals_shipping_inside_a_venue_at_night() {
                 &mut inf_render::DebrisCache::default(),
                 None,
                 &meshes,
+                &std::collections::HashMap::new(),
             );
             r.frame_lights = scene.lights.len();
             r.frame_batches = scene.scatter.len();

@@ -1406,6 +1406,7 @@ fn a_committed_body_lit_by_one_sun_is_not_near_black() {
         cutoff: 0.5,
         palette,
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
     // One directional sun, over the camera's shoulder — the light every level in
     // this engine starts with (`samples::blank3d_scene`'s own).

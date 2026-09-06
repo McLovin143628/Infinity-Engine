@@ -2475,6 +2475,29 @@ impl PackLevelSource {
                 if let Some(t) = &e.terrain {
                     bound.extend(t.layer_materials());
                 }
+                // **AND THE SKINNED MESH'S MATERIAL SLOTS** (wave CHAR1a.3). A
+                // slot is named by the `.inf_mesh`, not by any component, so a
+                // body whose face wants twelve materials bound exactly ONE of
+                // them here and eleven surfaces registered nothing, resolved
+                // nothing, and drew off their scalar colour. It is the same hole
+                // TER2a found for a terrain's four splat layers, one asset kind
+                // over — and it is closed on BOTH hosts in one wave, because the
+                // registration SEQUENCE is what `VtTextures::want_floor` is a
+                // pure function of and one host adding a material the other does
+                // not would page different tiles in PIE and in the game.
+                //
+                // Empty for every mesh written before the slot table existed, so
+                // this adds nothing to any level in this repository.
+                if let Some(sk) = e.skeletal_mesh.as_ref().and_then(|s| s.mesh) {
+                    if let Some(m) = self
+                        .reader
+                        .read(AssetId(sk))
+                        .ok()
+                        .and_then(|b| inf_asset::decode::<inf_mesh::MeshAsset>(&b).ok())
+                    {
+                        bound.extend(m.material_slot_assets.iter().flatten().map(|a| a.uuid()));
+                    }
+                }
             }
         };
         if let Some(lvl) = LevelSource::level_bytes(self)

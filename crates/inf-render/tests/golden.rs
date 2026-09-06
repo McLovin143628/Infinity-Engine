@@ -2051,6 +2051,7 @@ fn golden_skinned_mesh() {
         mesh: 0,
         palette,
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     };
 
     // P18.3: the scene shares bind-space geometry as an `Arc`, so a host that
@@ -2144,6 +2145,7 @@ fn golden_skinned_masked() {
         cutoff: 0.5,
         palette: palette.clone(),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     };
     let scene = |blend: u8| {
         let mut s = RenderScene {
@@ -2278,6 +2280,7 @@ fn golden_crowd_variation() {
             mesh: 0,
             palette: shared.clone(),
             shadow: inf_render::SkinnedShadow::Proxy,
+            sections: Vec::new(),
         });
     }
     scene.mark_dirty();
@@ -3475,6 +3478,7 @@ fn the_prepass_sees_a_skinned_character() {
         mesh: 0,
         palette: palette_at(&sk, &clip, 0.5),
         shadow: inf_render::SkinnedShadow::BindSphere,
+        sections: Vec::new(),
     });
     scene.mark_dirty();
     let view = look_view(DVec3::new(3.2, 1.6, 3.6), DVec3::new(0.0, 0.6, 0.0));
@@ -5607,6 +5611,7 @@ fn gi_sees_skinned_and_vgeom_geometry() {
             mesh: 0,
             palette: palette_at(&sk, &clip, 0.0),
             shadow: inf_render::SkinnedShadow::BindSphere,
+            sections: Vec::new(),
         });
         s.lights.push(sun);
         s.mark_dirty();

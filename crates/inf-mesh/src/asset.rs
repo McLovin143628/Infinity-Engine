@@ -204,14 +204,46 @@ pub struct MeshAsset {
     /// Names of the material slots this mesh expects, in slot order. The
     /// importer maps these to material asset GUIDs (stored as dependencies).
     pub material_slots: Vec<String>,
+    /// **The material each slot resolves to** — v3, wave CHAR1a.3 — index-aligned
+    /// to [`material_slots`](Self::material_slots), `None` where the importer
+    /// bound nothing.
+    ///
+    /// # Why the names were not enough
+    ///
+    /// [`material_slots`](Self::material_slots) has carried slot NAMES since P4
+    /// and [`SubMesh::material_slot`] has carried the index into them, so the
+    /// geometry has always known which of its triangles wanted which slot. What
+    /// nothing carried was **which asset that slot is** — the importer resolved
+    /// it, bound slot 0 to the whole body, and dropped the rest. A skinned mesh
+    /// therefore drew with one material however many slots it had: measured on
+    /// `SKM_Manny`, **2** slots and one drawn; on a MetaHuman face, **12**.
+    ///
+    /// It could not live in the sidecar. The sidecar is the *loose file* half of
+    /// an asset and neither a cooked `.ipack` nor a PIE `ScenePayload` carries
+    /// one — so a slot table there would make the editor draw a face correctly
+    /// and the shipped build draw it in one colour, which is the exact divergence
+    /// the PIE == shipping law exists to prevent. It is payload data because both
+    /// hosts have to read it.
+    ///
+    /// A shorter list than [`material_slots`](Self::material_slots) is legal and
+    /// means "the rest are unbound": every reader indexes with `get`.
+    pub material_slot_assets: Vec<Option<inf_asset::AssetId>>,
 }
 
 impl MeshAsset {
     /// Schema v2 (P11.1): [`SubMesh`] gained the additive, `#[serde(default)]`
     /// `skin` stream. A v1 payload has no skinned submeshes; new payloads always
-    /// write the (possibly empty) stream. No custom migration is needed beyond
-    /// the default newer-than-current guard.
-    pub const CURRENT_VERSION: u32 = 2;
+    /// write the (possibly empty) stream.
+    ///
+    /// **v3 (wave CHAR1a.3)** appends
+    /// [`material_slot_assets`](Self::material_slot_assets). bincode is
+    /// POSITIONAL — the standing law of this tree, caught three times — so
+    /// `#[serde(default)]` buys a v2 payload nothing: the decoder simply runs off
+    /// the end. The rung is a real one, with a frozen v2 record and a
+    /// [`AssetPayload::decode_wire`] branch, so **every `.inf_mesh` written
+    /// before this wave keeps reading** and comes back with an empty slot table,
+    /// which is exactly what it meant.
+    pub const CURRENT_VERSION: u32 = 3;
 
     /// Assemble a mesh from submeshes, computing the overall bounds.
     pub fn new(submeshes: Vec<SubMesh>, material_slots: Vec<String>) -> Self {
@@ -225,7 +257,69 @@ impl MeshAsset {
             submeshes,
             bounds,
             material_slots,
+            material_slot_assets: Vec::new(),
         }
+    }
+
+    /// **Bind the slot table** (v3): `(slot index, material)` pairs, in any
+    /// order, written into a list index-aligned to
+    /// [`material_slots`](Self::material_slots).
+    ///
+    /// A pair naming a slot the mesh does not have is IGNORED rather than
+    /// growing the list past the slots: a table longer than the slots is a table
+    /// a reader can index past the mesh's own submeshes, which is how a face
+    /// ends up wearing a body's skin.
+    pub fn bind_material_slots(&mut self, pairs: impl IntoIterator<Item = (u32, inf_asset::AssetId)>) {
+        if self.material_slots.is_empty() {
+            return;
+        }
+        self.material_slot_assets
+            .resize(self.material_slots.len(), None);
+        for (slot, id) in pairs {
+            if let Some(entry) = self.material_slot_assets.get_mut(slot as usize) {
+                *entry = Some(id);
+            }
+        }
+    }
+
+    /// The material bound to one slot, or `None`.
+    pub fn material_for_slot(&self, slot: u32) -> Option<inf_asset::AssetId> {
+        self.material_slot_assets.get(slot as usize).copied().flatten()
+    }
+
+    /// **The DRAWN sections of this mesh's skinned geometry**, as
+    /// `(first index, index count, material slot)` over the ONE concatenated
+    /// index buffer both hosts build with `skinned_mesh_data`.
+    ///
+    /// The concatenation rule is the projectors': submeshes in payload order,
+    /// each rebased onto the running vertex count, **including unskinned ones**
+    /// (a rigid part welded to a skeleton's root is kept and pinned to joint 0).
+    /// This function walks the same list in the same order, so the ranges it
+    /// returns address the buffer that function produced — which is why it lives
+    /// here, beside the payload, rather than being a third copy on each side.
+    ///
+    /// Returns an EMPTY vector for a mesh whose submeshes all want one slot:
+    /// "one section" is what every reader already does, so saying it costs a
+    /// draw call's worth of bookkeeping for no decision.
+    pub fn skinned_sections(&self) -> Vec<(u32, u32, u32)> {
+        let mut out: Vec<(u32, u32, u32)> = Vec::new();
+        let mut first = 0u32;
+        for sm in &self.submeshes {
+            let count = sm.indices.len() as u32;
+            let slot = sm.material_slot.unwrap_or(0);
+            match out.last_mut() {
+                // Adjacent submeshes wanting one slot are ONE range: a mesh split
+                // into parts for authoring reasons must not become one draw call
+                // per part.
+                Some(last) if last.2 == slot && last.0 + last.1 == first => last.1 += count,
+                _ => out.push((first, count, slot)),
+            }
+            first += count;
+        }
+        if out.len() < 2 {
+            return Vec::new();
+        }
+        out
     }
 
     pub fn triangle_count(&self) -> usize {
@@ -402,6 +496,82 @@ impl AssetPayload for MeshAsset {
         self.validate()
             .map_err(|e| inf_asset::AssetError::Decode(format!("invalid mesh: {e}")))?;
         Ok(self)
+    }
+
+    /// **The v2 → v3 rung.** A v2 payload has no slot table, and "no slot table"
+    /// is exactly what an empty one means — so this is a pure default-fill and
+    /// an honest migration rather than a guess.
+    ///
+    /// v1 is deliberately absent: it predates the `skin` stream and falls through
+    /// to the current shape, fails, and `decode` turns that into `SchemaTooOld`
+    /// with this type's own remedy — the behaviour every `.inf_mesh` in the tree
+    /// has had since P11.1, which this rung does not change.
+    fn migrates_from(v: u32) -> bool {
+        v == 2
+    }
+
+    fn decode_wire(bytes: &[u8], found: Option<u32>) -> inf_asset::Result<Self> {
+        if found == Some(2) {
+            let old: mesh_v2::MeshAsset = inf_asset::decode_shape(bytes)
+                .map_err(|e| inf_asset::AssetError::Decode(format!("v2 mesh: {e}")))?;
+            return Ok(old.into_current());
+        }
+        inf_asset::decode_shape(bytes)
+    }
+}
+
+/// **The frozen schema-v2 `.inf_mesh` record** — the shape before CHAR1a.3
+/// appended the material-slot table.
+///
+/// Ladder-local and declared field-for-field rather than derived from the live
+/// types, which is the whole point (`inf_anim`'s `skel_v2` says it first): a
+/// shape built by asking today's encoder what it emits reproduces the right
+/// bytes and pins nothing, because it moves whenever the encoder does. This says
+/// what v2 *was*, so the day someone appends a second table without a bump, the
+/// arms below stop matching real bytes.
+///
+/// [`SubMesh`] itself did not move, so it is named rather than re-declared — a
+/// copy of a 5-field struct that has not changed would be a second thing to keep
+/// in step, and the arms below write v2 bytes THROUGH this record, so a change to
+/// `SubMesh` breaks them loudly rather than silently.
+pub(crate) mod mesh_v2 {
+    use serde::{Deserialize, Serialize};
+
+    /// v2's payload: four fields, no slot table.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    pub struct MeshAsset {
+        pub schema_version: u32,
+        pub submeshes: Vec<super::SubMesh>,
+        pub bounds: super::Aabb,
+        pub material_slots: Vec<String>,
+    }
+
+    impl MeshAsset {
+        pub fn into_current(self) -> super::MeshAsset {
+            super::MeshAsset {
+                // The version is RAISED here, not carried: the value in hand is
+                // the current shape, and a payload that decoded through the v2
+                // rung and kept saying "2" would be re-migrated on every load and
+                // would re-encode as a v2 file the moment anything saved it.
+                schema_version: super::MeshAsset::CURRENT_VERSION,
+                submeshes: self.submeshes,
+                bounds: self.bounds,
+                material_slots: self.material_slots,
+                material_slot_assets: Vec::new(),
+            }
+        }
+
+        /// The v2 projection of a current payload — the encoder half, so the arms
+        /// can write real v2 bytes from a v3 value.
+        #[cfg_attr(not(test), allow(dead_code))]
+        pub fn from_current(m: &super::MeshAsset) -> Self {
+            Self {
+                schema_version: 2,
+                submeshes: m.submeshes.clone(),
+                bounds: m.bounds,
+                material_slots: m.material_slots.clone(),
+            }
+        }
     }
 }
 

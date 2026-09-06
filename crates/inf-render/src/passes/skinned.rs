@@ -251,7 +251,7 @@ const _: () = {
     assert!(SKINNED_PALETTE_MATRICES * 64 <= 128 * 1024 * 1024);
 };
 
-/// One draw: a contiguous run of instances sharing a mesh.
+/// One draw: a contiguous run of instances sharing a mesh **and a section**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SkinnedRun {
     /// Index into `RenderScene::skinned_meshes`.
@@ -261,6 +261,16 @@ pub struct SkinnedRun {
     pub first_instance: u32,
     /// Instances in the run.
     pub count: u32,
+    /// **The index range this run draws** (wave CHAR1a.3), or `None` for the
+    /// whole index buffer.
+    ///
+    /// `None` and `Some((0, index_count))` would draw the same triangles, and
+    /// the distinction is deliberate: `None` is what an instance with no
+    /// sections produces, and it makes the emitted command **byte-identical** to
+    /// the one this pass emitted before sections existed — the run does not even
+    /// have to know the mesh's index count to say "all of it". The two committed
+    /// skinned goldens are sha256-identical across the change because of it.
+    pub range: Option<(u32, u32)>,
 }
 
 /// **What one frame's skinned draws are, derived from the scene alone.**
@@ -279,6 +289,16 @@ pub struct SkinnedBatches {
     /// Per entry of [`order`](Self::order): its palette block's `(offset in
     /// matrices, live joint count)`, which is what the instance stream carries.
     pub palette: Vec<(u32, u32)>,
+    /// Per entry of [`order`](Self::order): which of its instance's
+    /// [`SkinnedSection`](crate::scene::SkinnedSection)s it draws, or `None` for
+    /// an instance that has none.
+    ///
+    /// An instance with N sections appears N times in `order` — one entry, one
+    /// `InstanceRaw`, one draw each — and every one of them names the SAME
+    /// palette block, because they are ranges of one body deformed by one
+    /// skeleton. That is the whole cost model of this feature: sections cost
+    /// draws and instance rows, never palette bytes.
+    pub section: Vec<Option<u32>>,
     /// One draw each.
     pub runs: Vec<SkinnedRun>,
     /// Distinct palette blocks in the atlas. **Fewer than `order.len()` is the
@@ -309,8 +329,27 @@ pub struct SkinnedBatches {
 /// arm that keeps the invariant true, and it is stated here rather than only at
 /// the loop that uses it because it is a property of *this* function.
 pub fn plan_skinned_batches(scene: &crate::scene::RenderScene) -> SkinnedBatches {
-    let mut order: Vec<u32> = (0..scene.skinned.len() as u32).collect();
-    order.sort_by_key(|i| scene.skinned[*i as usize].mesh);
+    // **(instance, section)** since wave CHAR1a.3, and the sort key carries the
+    // section so that all of one mesh's slot-0 ranges are contiguous, then all of
+    // its slot-1 ranges — one draw per (mesh, section) over every instance
+    // wearing it, rather than one draw per instance per section.
+    //
+    // An instance with NO sections contributes exactly one entry with `None`, and
+    // `(mesh, None)` sorts as `(mesh, 0)` would: for a scene of one-slot bodies —
+    // every committed character, every crowd agent, every garment, every golden —
+    // this is character-for-character the stable sort by mesh index that was here
+    // before, and it emits the same draws.
+    let mut order: Vec<(u32, Option<u32>)> = Vec::with_capacity(scene.skinned.len());
+    for (i, inst) in scene.skinned.iter().enumerate() {
+        if inst.sections.is_empty() {
+            order.push((i as u32, None));
+        } else {
+            for s in 0..inst.sections.len() as u32 {
+                order.push((i as u32, Some(s)));
+            }
+        }
+    }
+    order.sort_by_key(|(i, s)| (scene.skinned[*i as usize].mesh, s.unwrap_or(0)));
 
     // Palette blocks, keyed on the `Arc`'s address. Sound for the same reason
     // `skinned_meshes`' upload cache is: the scene holds the `Arc` for the whole
@@ -320,10 +359,11 @@ pub fn plan_skinned_batches(scene: &crate::scene::RenderScene) -> SkinnedBatches
     let mut blocks: std::collections::HashMap<usize, (u32, u32)> = std::collections::HashMap::new();
     let mut matrices = 0usize;
     let mut kept: Vec<u32> = Vec::with_capacity(order.len());
+    let mut kept_section: Vec<Option<u32>> = Vec::with_capacity(order.len());
     let mut palette: Vec<(u32, u32)> = Vec::with_capacity(order.len());
     let mut dropped = 0usize;
 
-    for i in order {
+    for (i, section) in order {
         let inst = &scene.skinned[i as usize];
         let key = if inst.palette.is_empty() {
             0
@@ -345,25 +385,33 @@ pub fn plan_skinned_batches(scene: &crate::scene::RenderScene) -> SkinnedBatches
             }
         };
         kept.push(i);
+        kept_section.push(section);
         palette.push(block);
     }
 
-    // One run per contiguous mesh, over the instances that survived.
+    // One run per contiguous (mesh, RANGE), over the entries that survived. The
+    // range rather than the section INDEX, because two instances of one mesh
+    // agree about what section 1 is: it is the same range of the same buffer.
     let mut runs: Vec<SkinnedRun> = Vec::new();
-    for (slot, i) in kept.iter().enumerate() {
-        let mesh = scene.skinned[*i as usize].mesh;
+    for (slot, (i, section)) in kept.iter().zip(&kept_section).enumerate() {
+        let inst = &scene.skinned[*i as usize];
+        let range = section
+            .and_then(|s| inst.sections.get(s as usize))
+            .map(|s| (s.first_index, s.index_count));
         match runs.last_mut() {
-            Some(run) if run.mesh == mesh => run.count += 1,
+            Some(run) if run.mesh == inst.mesh && run.range == range => run.count += 1,
             _ => runs.push(SkinnedRun {
-                mesh,
+                mesh: inst.mesh,
                 first_instance: slot as u32,
                 count: 1,
+                range,
             }),
         }
     }
 
     SkinnedBatches {
         order: kept,
+        section: kept_section,
         palette,
         runs,
         blocks: blocks.len(),
@@ -403,6 +451,9 @@ pub(crate) fn fill_palette_atlas(
         if (offset as usize) < watermark {
             continue;
         }
+        // (A repeat entry is skipped by the watermark above, and every section
+        // of one instance after its first IS a repeat — same `Arc`, same block —
+        // so a sectioned body still costs one palette write.)
         let inst = &scene.skinned[*i as usize];
         for (j, m) in inst.palette.iter().take(live as usize).enumerate() {
             scratch[offset as usize + j] = m.to_cols_array();
@@ -446,11 +497,44 @@ pub(crate) fn fill_palette_atlas(
 /// fragment's test is `w > 0.5 && w < 1.5`, which `0.0` and `0.5` both fail, so
 /// every committed skinned golden renders the identical pixels — proven, not
 /// assumed, by running them under `INF_GOLDEN_STRICT=1`.
-fn instance_raw(origin: &FloatingOrigin, inst: &SkinnedInstance, block: (u32, u32)) -> InstanceRaw {
+/// `section` is the range this row draws, when the instance has sections: its
+/// colour, PBR scalars, blend/cutoff and virtual-texture set replace the
+/// instance's own, which is the whole of what "a section has its own material"
+/// means on the wire. `None` reads the instance exactly as this function always
+/// did, so an unsectioned body packs the identical 33 words.
+fn instance_raw(
+    origin: &FloatingOrigin,
+    inst: &SkinnedInstance,
+    block: (u32, u32),
+    section: Option<&crate::scene::SkinnedSection>,
+) -> InstanceRaw {
     let model = origin.model_matrix(inst.translation, inst.rotation, inst.scale);
     let inv_scale = inst.scale.max(glam::Vec3::splat(1e-6)).recip();
     let nrm = Mat3::from_quat(inst.rotation) * Mat3::from_diagonal(inv_scale);
     let n = nrm.to_cols_array_2d();
+    // The surface: the section's when there is one, the instance's otherwise.
+    // Read as six values rather than branched at each use, so the two paths
+    // cannot drift apart field by field.
+    let (color, metallic, roughness, emissive, blend, cutoff, vt) = match section {
+        Some(sec) => (
+            sec.color,
+            sec.metallic,
+            sec.roughness,
+            sec.emissive,
+            sec.blend,
+            sec.cutoff,
+            sec.vt,
+        ),
+        None => (
+            inst.color,
+            inst.metallic,
+            inst.roughness,
+            inst.emissive,
+            inst.blend,
+            inst.cutoff,
+            inst.vt,
+        ),
+    };
     InstanceRaw {
         model: model.to_cols_array(),
         normal_mat: [
@@ -458,26 +542,21 @@ fn instance_raw(origin: &FloatingOrigin, inst: &SkinnedInstance, block: (u32, u3
             n[1][0], n[1][1], n[1][2], 0.0, //
             n[2][0], n[2][1], n[2][2], 0.0,
         ],
-        color: inst.color,
+        color,
         // P26.3: the same three reserved words the rigid path uses, packed by
         // the same rule — so a skinned surface and a rigid one cannot disagree
         // about what "this instance samples nothing" looks like on the wire.
         misc: {
-            let s = inst.vt.slots();
+            let s = vt.slots();
             [inst.id, s[0], s[1], s[2]]
         },
         pbr: [
-            inst.metallic,
-            inst.roughness,
+            metallic,
+            roughness,
             block.1 as f32,
-            inst.blend as f32 * 4.0 + inst.cutoff.clamp(0.0, 1.0),
+            blend as f32 * 4.0 + cutoff.clamp(0.0, 1.0),
         ],
-        emissive: [
-            inst.emissive[0],
-            inst.emissive[1],
-            inst.emissive[2],
-            block.0 as f32,
-        ],
+        emissive: [emissive[0], emissive[1], emissive[2], block.0 as f32],
     }
 }
 
@@ -839,11 +918,14 @@ impl SkinnedMeshNode {
             .order
             .iter()
             .zip(&plan.palette)
-            .map(|(i, block)| {
+            .zip(&plan.section)
+            .map(|((i, block), section)| {
+                let inst = &frame.scene.skinned[*i as usize];
                 instance_raw(
                     &frame.view.origin,
-                    &frame.scene.skinned[*i as usize],
+                    inst,
                     *block,
+                    section.and_then(|s| inst.sections.get(s as usize)),
                 )
             })
             .collect();
@@ -883,10 +965,31 @@ impl SkinnedMeshNode {
             if gpu_mesh.index_count == 0 {
                 continue;
             }
+            // The RANGE, clamped to the buffer that is actually uploaded. A
+            // section whose range runs past the mesh it came from draws less
+            // rather than reading past the end — the same rule
+            // `deformed_skinned_mesh` applies to an out-of-range triangle, and
+            // the reason it can happen at all is that the ranges are derived
+            // from the `.inf_mesh` while the geometry is uploaded from the
+            // store's cached copy of it.
+            let (first_index, index_count) = match run.range {
+                None => (0, gpu_mesh.index_count),
+                Some((f, c)) => {
+                    let f = f.min(gpu_mesh.index_count);
+                    (f, c.min(gpu_mesh.index_count - f))
+                }
+            };
+            if index_count == 0 {
+                continue;
+            }
             pass.set_vertex_buffer(0, gpu_mesh.vertices.slice(..));
             pass.set_index_buffer(gpu_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
             let first = run.first_instance;
-            pass.draw_indexed(0..gpu_mesh.index_count, 0, first..first + run.count);
+            pass.draw_indexed(
+                first_index..first_index + index_count,
+                0,
+                first..first + run.count,
+            );
         }
     }
 }
@@ -1037,6 +1140,7 @@ mod tests {
             palette,
             shadow: SkinnedShadow::BindSphere,
             vt: crate::scene::VtTextureSet::NONE,
+            sections: Vec::new(),
         }
     }
 
@@ -1074,7 +1178,8 @@ mod tests {
             SkinnedRun {
                 mesh: 0,
                 first_instance: 0,
-                count: 1000
+                count: 1000,
+                range: None,
             }
         );
         assert_eq!(
@@ -1134,12 +1239,14 @@ mod tests {
                 SkinnedRun {
                     mesh: 0,
                     first_instance: 0,
-                    count: 2
+                    count: 2,
+                    range: None,
                 },
                 SkinnedRun {
                     mesh: 1,
                     first_instance: 2,
-                    count: 2
+                    count: 2,
+                    range: None,
                 },
             ]
         );
@@ -1176,7 +1283,8 @@ mod tests {
             vec![SkinnedRun {
                 mesh: 0,
                 first_instance: 0,
-                count: SKINNED_PALETTE_MATRICES as u32
+                count: SKINNED_PALETTE_MATRICES as u32,
+                range: None,
             }]
         );
         // Every surviving block is inside the atlas — the aliasing check.

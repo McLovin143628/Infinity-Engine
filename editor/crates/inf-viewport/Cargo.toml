@@ -18,6 +18,13 @@ glam = { workspace = true }
 # spawn boundary on every platform, so it's a general (not target) dependency.
 inf-editor-core = { workspace = true }
 inf-ecs = { workspace = true }
+# Wave CHAR1a.3: `DerivedMaterial`, the record a skinned material SECTION draws
+# from. Ring 1 -> Ring 0, and no new build cost -- `inf-editor-core` above
+# already links it (as does `inf-render`, transitively). Named DIRECTLY rather
+# than re-exported for the reason `inf-pcg` below is: the block that reads it is
+# character-pinned against the shipped player's copy, and a mirror cannot spell
+# one crate two ways.
+inf-asset = { workspace = true }
 # Terrain heightfield + sculpt brushes (P10.2b): the host raycasts the cursor
 # against the shared terrain and applies strokes. Pure Ring-0 (no GPU), so it's
 # a general dependency even though only the windowed hosts drive sculpting.

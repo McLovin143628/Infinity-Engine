@@ -517,6 +517,7 @@ fn measure(pack: &Path, n: usize, banded: bool) -> Row {
             &mut debris,
             None,
             &fx.scatter_meshes,
+            &std::collections::HashMap::new(),
         );
         best_proj = best_proj.min(t.elapsed().as_secs_f64() * 1000.0);
     }

@@ -144,10 +144,11 @@ pub use renderer::{
     SCENE_SAMPLES,
 };
 pub use scene::{
-    apply_seam, box_uv, deformed_skinned_mesh, identity_palette, RenderFractureChunk,
+    apply_seam, box_uv, deformed_skinned_mesh, identity_palette, skinned_sections,
+    RenderFractureChunk,
     RenderFractureVertex, RenderTilemap, RenderVoxelChunk, RenderVoxelVertex, RenderVoxelVolume,
     ScatterBatch, ScatterClock, ScatterData, ScatterGeometry, ScatterInstance, ScatterInstanceRaw,
-    ScatterMemo, ScatterMeshes, ScatterSource, SkinnedInstance, SkinnedMeshData, SkinnedShadow,
+    ScatterMemo, ScatterMeshes, ScatterSource, SkinnedInstance, SkinnedMeshData, SkinnedSection, SkinnedShadow,
     SkinnedVertex, SkyParams, SpriteInstance, SpriteTextureUpload, SunParams, TerrainTileKey,
     TextureHandle, TilemapParams, VgeomAsset, VgeomInstance, VgeomMesh, VoxelChunkKey, CLOTH_TINT,
     DEFAULT_SUN_DIR, HAIR_TINT, ID_GIZMO_BASE, ID_NONE, INTERIOR_LOD_M, MAX_SCATTER_MESH_TRIANGLES,

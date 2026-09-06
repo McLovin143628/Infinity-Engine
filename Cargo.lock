@@ -3796,6 +3796,7 @@ name = "inf-viewport"
 version = "0.1.0"
 dependencies = [
  "glam 0.33.2",
+ "inf-asset",
  "inf-ecs",
  "inf-editor-core",
  "inf-math",

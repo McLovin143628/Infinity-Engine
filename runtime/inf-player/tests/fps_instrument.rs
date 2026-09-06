@@ -507,6 +507,7 @@ fn measure(
             &mut debris,
             renderer.vt_textures(),
             &fx.scatter_meshes,
+            &std::collections::HashMap::new(),
         );
         cpu[2] = t.elapsed().as_secs_f64() * 1000.0;
         let t = std::time::Instant::now();
@@ -2581,6 +2582,7 @@ fn the_island_at_shipping_resolution() {
                 &mut debris,
                 None,
                 &fx.scatter_meshes,
+                &std::collections::HashMap::new(),
             );
             let _ = &mut voxels;
             let plan = inf_render::plan_skinned_batches(&scene);

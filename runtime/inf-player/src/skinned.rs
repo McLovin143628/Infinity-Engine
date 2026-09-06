@@ -120,6 +120,14 @@ pub struct SkinnedDraw {
     /// [`RenderScene::skinned_meshes`](inf_render::RenderScene::skinned_meshes)
     /// entries across instances.
     pub key: (Uuid, Uuid),
+    /// **The mesh's material SECTIONS** (wave CHAR1a.3): one `(range, material)` per material slot, or EMPTY for a mesh whose submeshes all want
+    /// one slot — which is every committed character in this tree.
+    ///
+    /// The RANGE addresses the mesh's own index buffer; the `Uuid` is the slot's
+    /// material, which the PROJECTOR resolves into a surface and a virtual-texture
+    /// set — a `VtTextureSet` is a warm-gated snapshot of a per-frame residency,
+    /// and this value is cached for the life of the store.
+    pub sections: Arc<Vec<(u32, u32, Option<u128>)>>,
 }
 
 /// The key a shared palette is cached under: `(mesh, skeleton, entry clip)`.
@@ -193,6 +201,12 @@ pub struct SkinnedRegistry {
     /// Keyed by the pair and not by the mesh alone, unlike `skinned` above: the
     /// value is `skinning_matrices` over a SKELETON's rest pose, so it is a
     /// property of the rig and re-binding one mesh to two rigs is two answers.
+    /// **The drawn sections of each mesh**, cached hit or miss (wave CHAR1a.3).
+    ///
+    /// Keyed by the MESH alone, exactly like the geometry cache beside it and for
+    /// the same reason: the ranges and the slot materials are properties of the
+    /// `.inf_mesh`, not of the rig it is played on.
+    sections: Mutex<HashMap<Uuid, Arc<Vec<(u32, u32, Option<u128>)>>>>,
     rest_palettes: Mutex<HashMap<RestPaletteKey, Arc<Vec<Mat4>>>>,
 }
 
@@ -204,6 +218,7 @@ impl Default for SkinnedRegistry {
             skeletons: Mutex::default(),
             clips: Mutex::default(),
             state_machines: Mutex::default(),
+            sections: Mutex::default(),
             rest_palettes: Mutex::default(),
         }
     }
@@ -406,6 +421,7 @@ impl SkinnedRegistry {
             mesh,
             palette: Arc::new(inf_anim::skinning_matrices(&skeleton, &pose)),
             key: (mesh_id, skeleton_id),
+            sections: self.skinned_sections(mesh_id),
         })
     }
 
@@ -445,6 +461,7 @@ impl SkinnedRegistry {
             mesh,
             palette: self.rest_palette(&skeleton, (mesh_id, skeleton_id, entry)),
             key: (mesh_id, skeleton_id),
+            sections: self.skinned_sections(mesh_id),
         })
     }
 
@@ -544,6 +561,52 @@ impl SkinnedRegistry {
         let built = self.build_skinned_geometry(mesh_id).map(Arc::new);
         cache.insert(mesh_id, built.clone());
         built
+    }
+
+
+    /// **The drawn sections of one skeletal mesh**, cached — `(first index, index
+    /// count, material guid)` per material slot, EMPTY when the mesh wants one
+    /// slot, which is every committed character in this tree.
+    ///
+    /// # Why the store answers this and not the projector
+    ///
+    /// The ranges address the concatenated index buffer `skinned_mesh_data`
+    /// builds, and the slot materials come from the `.inf_mesh`'s own v3 table.
+    /// Both are properties of the ASSET, so they are derived once per mesh here —
+    /// beside the geometry, under the same cache, out of the same decode — rather
+    /// than per entity per frame in a projector that would then have to re-derive
+    /// the concatenation rule and hope it matched.
+    ///
+    /// What is NOT here is the surface. A section's colour, PBR scalars, blend
+    /// mode and virtual-texture set are resolved by the PROJECTOR, from the same
+    /// per-host material map that decides what is registered for the level: a
+    /// `VtTextureSet` is a warm-gated snapshot of a per-frame residency, and this
+    /// value is cached for the life of the store.
+    ///
+    /// **MIRROR**: keep byte-identical with the other host's, doc block included
+    /// (`projector_mirror.rs`).
+    fn skinned_sections(&self, mesh_id: Uuid) -> Arc<Vec<(u32, u32, Option<u128>)>> {
+        if let Some(hit) = lock(&self.sections).get(&mesh_id) {
+            return hit.clone();
+        }
+        let built = Arc::new(self.build_skinned_sections(mesh_id));
+        lock(&self.sections).insert(mesh_id, built.clone());
+        built
+    }
+
+    /// Decode a mesh asset and derive its sections.
+    ///
+    /// **MIRROR** — see [`skinned_sections`](Self::skinned_sections).
+    fn build_skinned_sections(&self, mesh_id: Uuid) -> Vec<(u32, u32, Option<u128>)> {
+        let Some(mesh) = self.load_payload::<MeshAsset>(mesh_id) else {
+            return Vec::new();
+        };
+        mesh.skinned_sections()
+            .into_iter()
+            .map(|(first, count, slot)| {
+                (first, count, mesh.material_for_slot(slot).map(|a| a.uuid().as_u128()))
+            })
+            .collect()
     }
 
     /// Decode a mesh asset and rebuild its bind-space skinned stream.

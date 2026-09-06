@@ -1624,6 +1624,124 @@ pub struct SkinnedInstance {
     /// on every instance that names none, which is every instance before this
     /// batch — and then the fragment shader runs the arithmetic it always ran.
     pub vt: VtTextureSet,
+    /// **The mesh's material SECTIONS** (wave CHAR1a.3) - one drawn index range
+    /// per material slot, each with its own surface. **Empty** means what it has
+    /// always meant: one draw over the whole index buffer, in this instance's own
+    /// colour / metallic / roughness / blend / cutoff / `vt`.
+    ///
+    /// # Why the ranges ride the instance and not the geometry
+    ///
+    /// [`SkinnedMeshData`] is cached by `Arc` identity and uploaded once; a
+    /// [`VtTextureSet`] is a **warm-gated snapshot** that changes as the
+    /// residency pages in. Putting the surfaces on the cached geometry would
+    /// freeze the first frame's answer into every later one. The RANGES are a
+    /// property of the mesh and are derived from it
+    /// (`inf_mesh::MeshAsset::skinned_sections`), which is why both projectors
+    /// call that one function rather than re-deriving the concatenation rule.
+    ///
+    /// A body with one slot - every committed character in this tree, every
+    /// crowd agent, every garment, and the MetaHuman full-body mesh UE's own
+    /// `CreateCombinedFaceAndBodyMesh` writes - leaves this empty and draws
+    /// exactly the command stream it drew before this field existed. That is not
+    /// a hope: the two committed skinned goldens are sha256-identical across the
+    /// change.
+    pub sections: Vec<SkinnedSection>,
+}
+
+/// **THE ONE DOOR both hosts build a skinned mesh's sections through** (wave
+/// CHAR1a.3).
+///
+/// `ranges` is `(first index, index count, material guid)` per section, as the
+/// two skinned stores derive it from the `.inf_mesh`'s v3 slot table.
+/// `instance` is the surface the entity's own `Material` resolved to — the
+/// fallback for a slot that names nothing, and for a slot whose material the
+/// host cannot resolve. `surface` reads a material GUID's
+/// `(colour, metallic, roughness, emissive, blend, cutoff)`; `vt_slots` reads
+/// the same GUID's virtual-texture set, which is the half that has to be asked
+/// per frame because residency warms.
+///
+/// # Why it is here and not twice in the projectors
+///
+/// Both hosts have to answer the same question — "what does slot 3 of this body
+/// draw as?" — from two different material stores, and the *rule* is the same
+/// while the *lookup* is not. Putting the rule in Ring 0 with the lookups as
+/// closures is the only shape where the two hosts cannot answer it differently;
+/// `projector_mirror` pins the two call sites, and this function is what those
+/// two call sites both reduce to.
+///
+/// Returns an EMPTY vector for an empty `ranges`, which is what an unsectioned
+/// mesh has: the instance then draws exactly the one whole-buffer command it drew
+/// before sections existed.
+pub fn skinned_sections(
+    ranges: &[(u32, u32, Option<u128>)],
+    instance: &SkinnedInstance,
+    mut surface: impl FnMut(u128) -> Option<([f32; 4], f32, f32, [f32; 3], u8, f32)>,
+    mut vt_slots: impl FnMut(u128) -> VtTextureSet,
+) -> Vec<SkinnedSection> {
+    ranges
+        .iter()
+        .map(|(first_index, index_count, material)| {
+            let mut out = SkinnedSection {
+                first_index: *first_index,
+                index_count: *index_count,
+                color: instance.color,
+                metallic: instance.metallic,
+                roughness: instance.roughness,
+                emissive: instance.emissive,
+                blend: instance.blend,
+                cutoff: instance.cutoff,
+                vt: instance.vt,
+            };
+            if let Some(guid) = *material {
+                if let Some((color, metallic, roughness, emissive, blend, cutoff)) =
+                    surface(guid)
+                {
+                    out.color = color;
+                    out.metallic = metallic;
+                    out.roughness = roughness;
+                    out.emissive = emissive;
+                    out.blend = blend;
+                    out.cutoff = cutoff;
+                }
+                out.vt = vt_slots(guid);
+            }
+            out
+        })
+        .collect()
+}
+
+/// One drawn range of a [`SkinnedMeshData`]'s index buffer, with the surface it
+/// draws in (wave CHAR1a.3).
+///
+/// The engine drew ONE material per skinned mesh until this type existed -
+/// measured, and it is not a corner case: `SKM_Manny` ships **two** material
+/// slots and a MetaHuman face **twelve**, and every one of them was drawn with
+/// slot 0's material. A face whose eyes, lashes, teeth and skin are one surface
+/// is not a face.
+///
+/// Every section of one instance shares that instance's **palette**: they are
+/// ranges of one skinned mesh deformed by one skeleton, so the atlas block is
+/// looked up once and the extra sections cost draw calls and instance rows, not
+/// palette bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkinnedSection {
+    /// First index of the range, into the mesh's own 32-bit index buffer.
+    pub first_index: u32,
+    /// Indices in the range. A section with none is skipped rather than drawn.
+    pub index_count: u32,
+    /// Linear-space base colour (rgba) for this range.
+    pub color: [f32; 4],
+    pub metallic: f32,
+    pub roughness: f32,
+    pub emissive: [f32; 3],
+    /// `0` opaque, `1` masked, `2` translucent - [`SkinnedInstance::blend`]'s
+    /// codes exactly, because a section is a surface and the fragment stage that
+    /// reads it is the same one.
+    pub blend: u8,
+    /// Alpha-test threshold when `blend == 1`.
+    pub cutoff: f32,
+    /// The virtual textures this range samples.
+    pub vt: VtTextureSet,
 }
 
 /// Directional, point, or spot light (R-P3). Spot is a point light with a cone
