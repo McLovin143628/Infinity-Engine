@@ -163,10 +163,8 @@ fn a_body_binds_to_the_rig_by_name_and_a_missing_name_is_named() {
 /// Re-point every parent index at the joint's new position after a filter, so a
 /// trimmed joint list is still topologically valid.
 fn reindex(mut joints: Vec<inf_anim::skeleton::Joint>) -> Vec<inf_anim::skeleton::Joint> {
-    for i in 0..joints.len() {
-        joints[i].parent = joints[i]
-            .parent
-            .and_then(|p| if (p as usize) < i { Some(p) } else { None });
+    for (i, joint) in joints.iter_mut().enumerate() {
+        joint.parent = joint.parent.filter(|&p| (p as usize) < i);
     }
     joints
 }
@@ -339,7 +337,7 @@ fn the_generated_hand_matches_the_reference_meshs_proportion() {
     .iter()
     .map(|n| seg(n))
     .sum();
-    let height = f64::from(BodyParams::default().height_m);
+    let height = BodyParams::default().height_m;
     let ratio = chain / height;
     // **MEASURED ON SKM_Manny**: 0.1720 m of finger on a 1.8054 m mesh =
     // 0.09527. SKM_Quinn: 0.1720 / 1.8017 = 0.09547.
