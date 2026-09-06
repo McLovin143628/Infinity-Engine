@@ -77,6 +77,10 @@ pub fn build(doc: &mut SceneDoc) {
         asset(ids.skeleton),
         asset(ids.mesh),
         asset(ids.machine),
+        Some(crate::scene::doc::CharacterSkin::from_material(
+            asset(ids.material),
+            &crate::character::starter_skin_material(),
+        )),
         DVec3::new(0.0, 0.0, 3.0),
         Some(asset(ids.actor)),
         crate::samples::starter_character_spec().params.height_m,

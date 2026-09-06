@@ -237,6 +237,12 @@ impl CharacterIds {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CharacterBuild {
     pub skeleton: AssetId,
+    /// **The skin** (wave CHAR1a audit) — the `.inf_mat` written beside the body
+    /// and named as its dependency. It was produced from the first build and
+    /// handed back to nobody, which is half of why nothing ever bound it: the
+    /// wizard's spawn half could not name the material the wizard had just
+    /// written. See [`crate::scene::doc::CharacterSkin`].
+    pub material: AssetId,
     pub mesh: AssetId,
     pub idle: AssetId,
     pub walk: AssetId,
@@ -1125,6 +1131,7 @@ pub fn build_character_with_ids(
         text,
         proposal_notes,
         skeleton,
+        material,
         mesh,
         idle,
         walk,
@@ -2537,6 +2544,10 @@ mod tests {
             out.skeleton.0,
             out.mesh.0,
             out.machine.0,
+            Some(crate::scene::doc::CharacterSkin::from_material(
+                out.material.0,
+                &starter_skin_material(),
+            )),
             glam::DVec3::new(1.0, 0.0, -2.0),
             Some(out.actor.0),
             1.8,

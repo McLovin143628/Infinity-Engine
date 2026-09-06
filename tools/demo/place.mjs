@@ -90,39 +90,17 @@ console.log("pawn:", pawn);
 const placed = await invoke("character_place_starter", { at: null, female: true });
 console.log("placed:", placed);
 
-// ── THE SKIN, BOUND ─────────────────────────────────────────────────────────
+// ── NO SKIN WORKAROUND HERE ANY MORE ──────────────────────────────
 //
-// **The finding this wave measured, and the workaround it is allowed.** The
-// island hero carries Transform, Visibility, SkeletalMesh, AnimStateMachine,
-// RigidBody3D and Collider3D — and NO `Material`. Read off the running editor
-// with `scene_details`, not inferred. `SceneDoc::edit_create_character` has never
-// inserted one, so the skin the New Character wizard writes
-// (`Starter_Skin.inf_mat`, which `inf-import --rebind-character` fills with the
-// mannequin's own albedo/normal/ORM) is bound by NOTHING: both hosts read
-// `Material` -> None, hand `vt_set_for` a `None` and draw the renderer's neutral
-// 0.8 grey. The editor's "untextured white" and PIE's "grey with dark limbs" are
-// one fact under two lights, not two bugs.
+// Wave CHAR1a.2 bound the skin from HERE, through `scene_add_component` +
+// `scene_apply_material`, because `SceneDoc::edit_create_character` inserted no
+// `Material` and the fix re-blesses committed levels. The CHAR1a audit landed
+// that fix: the door takes a `CharacterSkin` and inserts the component, and the
+// four committed levels that spawn a character were re-blessed with the cause.
 //
-// The fix is one insert in that door — and it re-blesses every committed level
-// that spawns a character, which this wave may not do. So the binding is applied
-// HERE, through `scene_apply_material`: the same door an author takes when they
-// drag a material onto an actor, one undo step, and nothing written to disk.
-const SKIN_M = "00000000-0000-0000-0000-00005c1000a1";
-const SKIN_F = "00000000-0000-0000-0000-00005c1000b1";
-for (const [who, id, guid] of [["hero", SKIN_M, pawn], ["female", SKIN_F, placed]]) {
-  if (typeof guid !== "string" || guid.length < 8) continue;
-  // **The component first, and that is a finding of its own.**
-  // `edit_apply_material` skips any target that does not already carry a
-  // `Material` ("Only entities that already carry a Material component") and
-  // returns a count — so dragging a material onto a character in the viewport
-  // applies to nothing and reports nothing. Measured here: `skin on hero: 0`
-  // until this line existed.
-  await invoke("scene_add_component", {
-    guids: [guid],
-    typePath: "inf_ecs::components::Material",
-  });
-  const n = await invoke("scene_apply_material", { assetId: id, targets: [guid] });
-  console.log(`skin on ${who}: ${n}`);
-}
+// So the workaround is gone, and that is the point: a demo loop that dresses the
+// scene before photographing it photographs the loop, not the engine. What these
+// frames show now is what an author gets.
+
 ws.close();
 process.exit(typeof placed === "string" && placed.length > 8 ? 0 : 3);

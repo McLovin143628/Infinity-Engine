@@ -658,6 +658,10 @@ pub fn hybrid_scene() -> SceneDoc {
         asset(ids.skeleton),
         asset(ids.mesh),
         asset(ids.machine),
+        Some(crate::scene::doc::CharacterSkin::from_material(
+            asset(ids.material),
+            &crate::character::starter_skin_material(),
+        )),
         DVec3::new(0.0, 0.0, 4.0),
         Some(asset(ids.actor)),
         starter_character_spec().params.height_m,
@@ -1023,6 +1027,10 @@ pub fn blank3d_scene() -> SceneDoc {
         asset(ids.skeleton),
         asset(ids.mesh),
         asset(ids.machine),
+        Some(crate::scene::doc::CharacterSkin::from_material(
+            asset(ids.material),
+            &crate::character::starter_skin_material(),
+        )),
         DVec3::ZERO,
         Some(asset(ids.actor)),
         starter_character_spec().params.height_m,
@@ -12953,6 +12961,14 @@ mod tests {
             Uuid::from_u128(1),
             Uuid::from_u128(2),
             Uuid::from_u128(3),
+            // **`None`, and that is the assertion below** (wave CHAR1a audit).
+            // The showcase's hero is hand-built from six assets and there is no
+            // `.inf_mat` among them, so it wears no skin — and the door must
+            // therefore be asked for no skin, or this arm would compare a
+            // character with a surface against one without and call the
+            // difference a drift. The `Material` comparison below is what keeps
+            // the pair honest in both directions.
+            None,
             feet,
             None,
             PHASE29_HEIGHT_M,
@@ -13002,6 +13018,20 @@ mod tests {
             dw.get::<CharacterController3D>(door).is_some()
                 && sw.get::<CharacterController3D>(sample).is_some(),
             "one of the two has no character controller"
+        );
+        // **The surface, since the wave CHAR1a audit.** `edit_create_character`
+        // now inserts a `Material` when it is handed a skin, so "field by field"
+        // has one more field — and it is the field that was missing from every
+        // character in this engine. Both sides are `None` here (the showcase
+        // ships no `.inf_mat`); the arm fails the moment one of them grows a
+        // surface the other does not.
+        let mat = |m: Option<&inf_ecs::components::Material>| {
+            m.map(|m| (m.asset, m.base_color, m.metallic, m.roughness))
+        };
+        assert_eq!(
+            mat(dw.get::<inf_ecs::components::Material>(door)),
+            mat(sw.get::<inf_ecs::components::Material>(sample)),
+            "the showcase's surface is not the one the wizard's door builds"
         );
         // …and the fixture is not vacuous: a capsule with real dimensions.
         let c = sw.get::<Collider3D>(sample).expect("a capsule");

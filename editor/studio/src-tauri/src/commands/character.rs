@@ -232,10 +232,29 @@ pub async fn character_place_starter(
         let at = at.unwrap_or_else(|| {
             inf_ecs::movement::camera_subject(doc.world())
                 .and_then(|g| doc.world().entity_of(g))
-                .and_then(|e| doc.world().world().get::<GlobalTransform>(e).copied())
-                .map(|t| {
+                .and_then(|e| {
+                    let w = doc.world().world();
+                    let t = w.get::<GlobalTransform>(e).copied()?;
+                    // **The pawn's FEET, not its transform** (wave CHAR1a
+                    // audit). `at` is the feet — the door lifts it to the
+                    // capsule centre itself — and the pawn's transform IS a
+                    // capsule centre, so handing it over placed the new body
+                    // one `feet_offset_m` in the air. Measured on the running
+                    // editor: the hero's transform sat at y = 16.5628 and the
+                    // placed body's at 17.4636, exactly the hero's
+                    // 0.6125 + 0.2625 = 0.875 m, and the frame showed her
+                    // hovering with her capsule buried in the road.
+                    let drop = w
+                        .get::<inf_ecs::components::CharacterMovement>(e)
+                        .map(|cm| {
+                            inf_ecs::movement::feet_offset_m(
+                                cm,
+                                w.get::<inf_ecs::components::Collider3D>(e),
+                            )
+                        })
+                        .unwrap_or(0.0);
                     let p = t.translation();
-                    [p.x + 1.5, p.y, p.z]
+                    Some([p.x + 1.5, p.y - drop, p.z])
                 })
                 .unwrap_or([0.0, 0.0, 0.0])
         });
@@ -248,6 +267,13 @@ pub async fn character_place_starter(
             asset(ids.skeleton)?,
             asset(ids.mesh)?,
             asset(ids.machine)?,
+            // **The skin the committed folder already ships** (wave CHAR1a
+            // audit). Both starter folders carry a `Starter*_Skin.inf_mat`, and
+            // until this argument existed nothing bound it.
+            Some(inf_editor_core::scene::doc::CharacterSkin::from_material(
+                asset(ids.material)?,
+                &inf_editor_core::character::starter_skin_material(),
+            )),
             glam::DVec3::new(at[0], at[1], at[2]),
             Some(asset(ids.actor)?),
             if female {
@@ -295,6 +321,11 @@ pub async fn character_create(
                 built.skeleton.0,
                 built.mesh.0,
                 built.machine.0,
+                // The material the build just wrote (wave CHAR1a audit).
+                Some(inf_editor_core::scene::doc::CharacterSkin::from_material(
+                    built.material.0,
+                    &inf_editor_core::character::starter_skin_material(),
+                )),
                 glam::DVec3::new(at[0], at[1], at[2]),
                 Some(built.actor.0),
                 spec.params.height_m,

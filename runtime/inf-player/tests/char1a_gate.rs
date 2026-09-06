@@ -1509,3 +1509,255 @@ fn lowest_ground_joint_y(sk: &Skeleton, pose: &inf_anim::Pose) -> f32 {
     }
     lo
 }
+
+// ── THE SKIN, BOUND (wave CHAR1a audit) ─────────────────────────────────────
+
+/// **A CHARACTER WEARS THE SKIN ITS OWN WIZARD WROTE** — the audit's priority
+/// (a), and the defect CHAR1a.2 measured and carried as item 82.
+///
+/// # What was wrong
+///
+/// `SceneDoc::edit_create_character` inserted a `SkeletalMesh`, an
+/// `AnimStateMachine`, a body, a capsule and a controller — and **no
+/// `Material`**. The New Character wizard writes `<Name> Skin.inf_mat` beside
+/// the body and names it as the mesh's dependency; `inf-import
+/// --rebind-character` fills that file with the imported body's own albedo,
+/// normal and ORM. Nothing bound it. Both hosts read `Material` -> `None`, hand
+/// `inf_render::vt_set_for` a `None`, and draw the renderer's neutral 0.8 grey.
+/// Read off the RUNNING editor with `scene_details`, not inferred: the island
+/// hero carried `Transform, Visibility, SkeletalMesh, AnimStateMachine,
+/// RigidBody3D, Collider3D` and nothing else that is a surface.
+///
+/// So every character frame this campaign has taken — the editor's "untextured
+/// white" and PIE's "grey with dark limbs" — was one fact under two lights.
+///
+/// # What this arm asks
+///
+/// Of every committed `.inf_lvl`: any entity wearing one of the two **committed
+/// starter bodies** must carry a `Material` bound to that body's own skin. It is
+/// asked of the bodies rather than of "every skeletal entity" on purpose —
+/// `samples/character-demo` and `samples/phase29-locomotion` build their heroes
+/// by hand from six assets and ship no `.inf_mat` at all, and a rule that
+/// demanded one would be demanding content that does not exist.
+///
+/// **The mutation**: drop the `Material` insert from
+/// `edit_create_character_with_guid` and re-bless. Every one of the characters
+/// below loses its binding and the arm names them. Verified.
+#[test]
+fn every_committed_starter_character_wears_its_own_skin() {
+    use inf_ecs::components::{Material, SkeletalMesh};
+
+    // (body, skin) — the two committed characters' fixed GUIDs.
+    let pairs = [
+        (
+            uuid::Uuid::from_u128(0x5C10_00A2),
+            uuid::Uuid::from_u128(0x5C10_00A1),
+        ),
+        (
+            uuid::Uuid::from_u128(0x5C10_00B2),
+            uuid::Uuid::from_u128(0x5C10_00B1),
+        ),
+    ];
+    let root = repo();
+    let mut levels: Vec<PathBuf> = Vec::new();
+    for dir in ["samples", "templates"] {
+        let Ok(subs) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
+        let mut subs: Vec<PathBuf> = subs.filter_map(|e| e.ok().map(|e| e.path())).collect();
+        subs.sort();
+        for sub in subs {
+            let Ok(files) = std::fs::read_dir(&sub) else {
+                continue;
+            };
+            let mut here: Vec<PathBuf> = files
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|e| e == "inf_lvl"))
+                .collect();
+            here.sort();
+            levels.extend(here);
+        }
+    }
+    levels.sort();
+    assert!(
+        levels.len() >= 20,
+        "only {} committed levels were walked — this arm is not looking at the \
+         tree's content",
+        levels.len()
+    );
+
+    let mut found = 0usize;
+    let mut in_levels: BTreeSet<String> = BTreeSet::new();
+    let mut naked: Vec<String> = Vec::new();
+    for path in &levels {
+        let Ok(mut doc) = inf_editor_core::scene::serialize::load(path) else {
+            continue;
+        };
+        let w = doc.world_mut().world_mut();
+        let mut q = w.query::<(&inf_ecs::Guid, &SkeletalMesh, Option<&Material>)>();
+        for (g, sm, mat) in q.iter(w) {
+            let Some(mesh) = sm.mesh else { continue };
+            let Some((_, skin)) = pairs.iter().find(|(body, _)| *body == mesh) else {
+                continue;
+            };
+            found += 1;
+            in_levels.insert(
+                path.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("?")
+                    .to_string(),
+            );
+            match mat.and_then(|m| m.asset) {
+                Some(a) if a == *skin => {}
+                other => naked.push(format!(
+                    "{} entity {} wears body {mesh} and its Material.asset is {other:?}, \
+                     not the skin {skin}",
+                    path.display(),
+                    g.0
+                )),
+            }
+        }
+    }
+    // Non-vacuous in both dimensions: characters, and levels they live in.
+    assert!(
+        found >= 4 && in_levels.len() >= 4,
+        "the walk found {found} committed starter character(s) across {} level(s) — \
+         it is not seeing the content it is asserting about",
+        in_levels.len()
+    );
+    assert!(
+        naked.is_empty(),
+        "{} committed character(s) draw the renderer's neutral grey because nothing \
+         binds their skin:\n  {}",
+        naked.len(),
+        naked.join("\n  ")
+    );
+    eprintln!(
+        "{found} committed starter characters across {} levels, every one bound to \
+         its own skin",
+        in_levels.len()
+    );
+}
+
+/// **THE DOOR ITSELF** — `edit_create_character` inserts the surface it is
+/// handed, and inserts none when it is handed none (wave CHAR1a audit).
+///
+/// The arm above reads committed bytes, so it would stay green if the bytes were
+/// hand-edited and the door left broken. This one asks the door.
+///
+/// **The mutation**: delete the `if let Some(skin) = skin { ... }` block. The
+/// first assertion fails with `Material` absent. Verified.
+#[test]
+fn the_character_door_inserts_the_skin_it_is_given() {
+    use inf_editor_core::scene::doc::CharacterSkin;
+    use inf_editor_core::scene::SceneDoc;
+
+    let skin = CharacterSkin {
+        asset: uuid::Uuid::from_u128(0xBEEF),
+        base_color: [0.62, 0.58, 0.55, 1.0],
+        metallic: 0.0,
+        roughness: 0.62,
+    };
+    let mut doc = SceneDoc::new();
+    let dressed = doc.edit_create_character(
+        "Dressed",
+        uuid::Uuid::from_u128(1),
+        uuid::Uuid::from_u128(2),
+        uuid::Uuid::from_u128(3),
+        Some(skin),
+        glam::DVec3::ZERO,
+        None,
+        1.8,
+    );
+    let bare = doc.edit_create_character(
+        "Bare",
+        uuid::Uuid::from_u128(1),
+        uuid::Uuid::from_u128(2),
+        uuid::Uuid::from_u128(3),
+        None,
+        glam::DVec3::ZERO,
+        None,
+        1.8,
+    );
+    let e = doc.world().entity_of(dressed).expect("dressed spawned");
+    let m = doc
+        .world()
+        .world()
+        .get::<inf_ecs::components::Material>(e)
+        .copied()
+        .expect(
+            "the character door inserted no `Material` — every character in this \
+             engine draws the renderer's neutral grey",
+        );
+    assert_eq!(m.asset, Some(skin.asset), "the binding is not the skin's");
+    assert_eq!(
+        (m.base_color.r, m.base_color.g, m.base_color.b),
+        (0.62, 0.58, 0.55),
+        "the flattened scalars are not the material's — the component would name \
+         a material whose numbers it does not carry"
+    );
+    assert_eq!(m.roughness, 0.62);
+
+    let e = doc.world().entity_of(bare).expect("bare spawned");
+    assert!(
+        doc.world()
+            .world()
+            .get::<inf_ecs::components::Material>(e)
+            .is_none(),
+        "a character created with no skin grew one anyway — `None` must stay \
+         exactly the pre-audit behaviour"
+    );
+}
+
+/// **APPLY-MATERIAL NO LONGER SKIPS IN SILENCE** (wave CHAR1a audit, carried 83).
+///
+/// `edit_apply_material` looped over its targets and `continue`d past any that
+/// did not already carry a `Material`, returning a count nobody reads — so
+/// dragging a skin onto a character in the viewport applied to **zero** entities
+/// and said nothing. Measured on the running editor by wave CHAR1a.2: `skin on
+/// hero: 0`.
+///
+/// **The mutation**: restore the `continue`. `applied` is 0 and the assertion
+/// names it. Verified.
+#[test]
+fn apply_material_inserts_the_component_it_used_to_skip() {
+    use inf_editor_core::ipc::SpawnKind;
+    use inf_editor_core::scene::SceneDoc;
+
+    let mut doc = SceneDoc::new();
+    // A bare entity: no `Material` anywhere on it, which is exactly the state a
+    // character was in before this wave.
+    let g = doc.edit_create(SpawnKind::Empty, "Bare", None);
+    assert!(
+        doc.world()
+            .entity_of(g)
+            .and_then(|e| doc.world().world().get::<inf_ecs::components::Material>(e))
+            .is_none(),
+        "the fixture is vacuous: the target already carries a Material"
+    );
+    let asset = uuid::Uuid::from_u128(0xFEED);
+    let applied = doc.edit_apply_material(
+        &[g],
+        Some(asset),
+        [0.1, 0.2, 0.3, 1.0],
+        0.25,
+        0.75,
+        [0.0; 3],
+        "Opaque",
+        0.5,
+    );
+    assert_eq!(
+        applied, 1,
+        "apply-material reported {applied} — it skipped a target with no \
+         `Material` instead of inserting one, which is the silent skip"
+    );
+    let m = doc
+        .world()
+        .entity_of(g)
+        .and_then(|e| doc.world().world().get::<inf_ecs::components::Material>(e))
+        .copied()
+        .expect("no Material after apply");
+    assert_eq!(m.asset, Some(asset));
+    assert_eq!(m.metallic, 0.25);
+    assert_eq!(m.roughness, 0.75);
+}

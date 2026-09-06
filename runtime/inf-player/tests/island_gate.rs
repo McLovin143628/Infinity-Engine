@@ -2213,12 +2213,22 @@ fn the_cooked_island_carries_the_ground_its_layers_bind() {
     // `Material::asset: None` — the scalars-only path — and a texture of one
     // would be 1.6 MB of a single texel. So the closure grows by exactly one
     // material for three new entities.
+    //
+    // **SEVEN since the wave CHAR1a audit, and the seventh is the HERO'S SKIN.**
+    // `SceneDoc::edit_create_character` inserted no `Material` at all, so the
+    // `Starter_Skin.inf_mat` the New Character wizard writes beside every body —
+    // the file `inf-import --rebind-character` fills with the imported
+    // mannequin's albedo, normal and ORM — was bound by nothing, reached the
+    // cook's closure through nothing, and shipped in no pack. The character drew
+    // the renderer's neutral 0.8 grey in both hosts. The door binds it now, the
+    // island's `.inf_lvl` was re-blessed with that cause, and the closure follows
+    // the edge: a drop back to six is the hero's skin unbound again.
     assert_eq!(
         content.materials.len(),
-        6,
-        "the pack carries {} derived material records, not six — the cook's \
+        7,
+        "the pack carries {} derived material records, not seven — the cook's \
          closure did not follow `Terrain.layers[*].material`, the road's \
-         `Material.asset` or the kerb's",
+         `Material.asset`, the kerb's, or the hero's skin",
         content.materials.len()
     );
     // Twenty-one: six albedo + six normal + six ORM + three detail (grass, rock
@@ -2235,7 +2245,12 @@ fn the_cooked_island_carries_the_ground_its_layers_bind() {
     //    content, and the deterministic floor it admits — the numbers the frame
     //    instrument's "N virtual textures" line reports.
     let mats = content.vt_materials();
-    assert_eq!(mats.len(), 6, "the host's material map is not the pack's");
+    // Seven since the wave CHAR1a audit — the hero's skin (see the pack
+    // assertion above). It contributes no TEXTURE to the counts below: the
+    // committed `Starter_Skin.inf_mat` is a scalars-only dielectric, and it is
+    // `inf-import --rebind-character` that fills it with an imported body's
+    // maps, in a local project this gate never opens.
+    assert_eq!(mats.len(), 7, "the host's material map is not the pack's");
     let order = inf_render::registration_order(&mats);
     assert_eq!(
         order.len(),
@@ -2246,8 +2261,8 @@ fn the_cooked_island_carries_the_ground_its_layers_bind() {
         order.len()
     );
     println!(
-        "ISLAND GROUND: 4 layers + 1 road + 1 kerb -> 6 materials -> {} textures; \
-         registration order {:?}",
+        "ISLAND GROUND: 4 layers + 1 road + 1 kerb + 1 hero skin -> 7 materials \
+         -> {} textures; registration order {:?}",
         content.textures.len(),
         order
             .iter()

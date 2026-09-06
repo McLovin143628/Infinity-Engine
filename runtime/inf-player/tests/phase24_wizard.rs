@@ -170,6 +170,10 @@ fn doc_with(made: &Made) -> (SceneDoc, Uuid) {
         made.build.skeleton.0,
         made.build.mesh.0,
         made.build.machine.0,
+        Some(inf_editor_core::scene::doc::CharacterSkin::from_material(
+            made.build.material.0,
+            &inf_editor_core::character::starter_skin_material(),
+        )),
         DVec3::ZERO,
         // The wizard's own controller is REPLACED below by this file's `driver`,
         // whose only job is to default `speed` — see its doc comment. Passing

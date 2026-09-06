@@ -115,6 +115,25 @@ Say ("player  {0} ({1:N1} MB, built {2})" -f $playerExe, ((Get-Item $playerExe).
 #    The boot ladder discovers the showcase by walking up from the running
 #    executable, so the working directory is load-bearing: launched from
 #    elsewhere the editor opens the start screen instead of the island.
+#
+#    ── THE CRASH-RECOVERY DOCUMENT IS MOVED ASIDE FIRST (wave CHAR1a audit) ──
+#
+#    This loop ends by killing the editor, and a killed editor leaves
+#    `<app_data>/crash-recovery.inf_lvl` behind — which the NEXT boot silently
+#    restores in place of the shipped level. Measured: a run that placed a second
+#    body found that body already in the document at boot, before it placed
+#    anything, because the previous run's kill had written it there.
+#
+#    So every frame after the first run of a session was a photograph of the
+#    PREVIOUS run's document. It is renamed rather than deleted: it is a
+#    recovery file and it belongs to the author, not to this script.
+$recovery = Join-Path $env:APPDATA "com.infinityengine.app\crash-recovery.inf_lvl"
+if (Test-Path $recovery) {
+    $aside = "$recovery.demo-aside"
+    Move-Item -Force $recovery $aside
+    Say "moved a stale crash-recovery document aside to $aside (it would have been restored over the shipped level)"
+}
+
 $env:INF_WEBVIEW_DEBUG_PORT = "$Port"
 $env:INF_PIE_HERO_LOG = $heroCsv
 $proc = Start-Process -FilePath $exe -WorkingDirectory $release -PassThru

@@ -31,6 +31,44 @@ use crate::ipc::{SceneDelta, SceneNode, SceneSnapshot, SpawnKind};
 use crate::scene::serialize::{EntityRecord, LevelSettings};
 use crate::scene::undo::{EditCommand, EditHistory};
 
+/// **The surface a character is created wearing** (wave CHAR1a audit) — the
+/// `.inf_mat` GUID plus the scalars flattened off it, which is exactly what
+/// [`SceneDoc::edit_apply_material`] writes onto a `Material` component.
+///
+/// # Why the door takes the numbers and not just the id
+///
+/// The renderer reads the *component*: `host.rs`/`render.rs` take
+/// `base_color`/`metallic`/`roughness` from it and use `Material::asset` only to
+/// resolve the virtual-texture set (`inf_render::vt_set_for`). So a door that
+/// bound the id and left the scalars at their defaults would have written a
+/// component whose numbers do not describe the material it names — the exact
+/// state P26.3b's "the binding *adds* the texture edge, it never becomes the
+/// only copy of the numbers" forbids. Four fields, and they are the four the
+/// flattening has always carried.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CharacterSkin {
+    /// The `.inf_mat` this surface is bound to.
+    pub asset: Uuid,
+    /// Linear RGBA base colour, flattened off the material.
+    pub base_color: [f32; 4],
+    /// 0 = dielectric, 1 = metal.
+    pub metallic: f32,
+    /// Perceptual roughness.
+    pub roughness: f32,
+}
+
+impl CharacterSkin {
+    /// Flatten an authored material into the four fields the component carries.
+    pub fn from_material(asset: Uuid, m: &inf_material::MaterialAsset) -> Self {
+        Self {
+            asset,
+            base_color: m.base_color,
+            metallic: m.metallic,
+            roughness: m.roughness,
+        }
+    }
+}
+
 /// Per-bake accounting returned by [`SceneDoc::edit_erode_region`], derived from
 /// the committed height delta (so it is adapter-independent, unlike GPU float
 /// order). Richer stats (sediment moved, water balance) come from the CPU
@@ -2014,7 +2052,8 @@ impl SceneDoc {
     }
 
     /// Create a **character**: an entity carrying the `SkeletalMesh` +
-    /// `AnimStateMachine` pair a generated character needs (P24.5).
+    /// `AnimStateMachine` + `Material` trio a generated character needs (P24.5;
+    /// the surface since the wave CHAR1a audit).
     ///
     /// One `Create` undo step, on the `edit_create_lake` pattern — the components
     /// are attached *before* the record is snapshotted, so undo removes a
@@ -2033,6 +2072,7 @@ impl SceneDoc {
         skeleton: Uuid,
         mesh: Uuid,
         machine: Uuid,
+        skin: Option<CharacterSkin>,
         at: DVec3,
         controller: Option<Uuid>,
         height_m: f64,
@@ -2043,6 +2083,7 @@ impl SceneDoc {
             skeleton,
             mesh,
             machine,
+            skin,
             at,
             controller,
             height_m,
@@ -2075,6 +2116,12 @@ impl SceneDoc {
         skeleton: Uuid,
         mesh: Uuid,
         machine: Uuid,
+        // **The skin the wizard already wrote** (wave CHAR1a audit) — see
+        // [`CharacterSkin`]. `None` leaves the entity with no `Material`, which
+        // is what every character in this engine had until this parameter
+        // existed, and is still the right answer for a caller that has no
+        // surface to name.
+        skin: Option<CharacterSkin>,
         at: DVec3,
         controller: Option<Uuid>,
         height_m: f64,
@@ -2134,6 +2181,37 @@ impl SceneDoc {
                 movement,
                 t,
             ));
+            // ── THE SKIN (wave CHAR1a audit) ──
+            //
+            // **Nothing in this engine bound a character's skin.** The New
+            // Character wizard writes `<Name> Skin.inf_mat` beside the body and
+            // names it as the mesh's dependency, and `inf-import
+            // --rebind-character` fills it with the imported body's own albedo,
+            // normal and ORM — and then both hosts read `Material` → `None`,
+            // hand `vt_set_for` a `None`, and draw the renderer's neutral 0.8
+            // grey. Read off the running editor with `scene_details`, not
+            // inferred: the island hero carried `Transform, Visibility,
+            // SkeletalMesh, AnimStateMachine, RigidBody3D, Collider3D` and no
+            // `Material`. That is why every character frame this campaign has
+            // taken shows a grey or white body.
+            //
+            // The component is inserted here, in the same pre-record window as
+            // the rig, for the same reason the rig is: undo removes a character
+            // and redo restores one that is still wearing its skin.
+            if let Some(skin) = skin {
+                self.world.world_mut().entity_mut(entity).insert(Material {
+                    base_color: Color::new(
+                        skin.base_color[0],
+                        skin.base_color[1],
+                        skin.base_color[2],
+                        skin.base_color[3],
+                    ),
+                    metallic: skin.metallic,
+                    roughness: skin.roughness,
+                    asset: Some(skin.asset),
+                    ..Default::default()
+                });
+            }
             if let Some(actor) = controller {
                 self.world
                     .world_mut()
@@ -2865,8 +2943,11 @@ impl SceneDoc {
 
     /// Apply a material's PBR parameters to each target entity's `Material`
     /// component as one undo step (Content-Drawer apply-by-drag / "Apply to
-    /// Selection", P7.1). Targets without a `Material` are skipped. Returns how
-    /// many entities were updated.
+    /// Selection", P7.1). **A target without a `Material` gets one inserted**
+    /// (wave CHAR1a audit — it used to be skipped, silently, which is why
+    /// dragging a skin onto a character applied to zero entities); a target that
+    /// is gone, or that the registry will not let carry a `Material`, is refused
+    /// with a warning. Returns how many entities were updated.
     ///
     /// # P26.3b — it also writes the BINDING
     ///
@@ -2912,8 +2993,31 @@ impl SceneDoc {
         self.begin_transaction("Apply Material");
         let mut applied = 0;
         for &g in targets {
-            // Only entities that already carry a Material component.
-            if self.prop_value(g, tp, "base_color").is_none() {
+            // **A target with no `Material` GETS ONE** (wave CHAR1a audit).
+            //
+            // This used to `continue`, and it returned a count nobody reads —
+            // so dragging a material onto a character in the viewport applied to
+            // *nothing* and said *nothing*. Measured on the running editor:
+            // `skin on hero: 0`, with no warning anywhere. A door whose refusal
+            // is a number in a return value is a silent skip.
+            //
+            // Inserting is the same answer [`edit_apply_sprite_slice`] gives one
+            // door over ("a target without a `Sprite` gets one inserted"), and it
+            // is the right one for the same reason: the caller named a surface
+            // and a material, and the component is the *place the surface lives*,
+            // not a precondition the author was supposed to have arranged.
+            // `edit_add_component` is the door, so the insert is the ordinary
+            // recorded `SwapComponents` step — inside this transaction, so the
+            // whole apply is still ONE undo.
+            //
+            // An entity that is gone, or one the registry will not let carry a
+            // `Material`, is refused OUT LOUD.
+            if self.prop_value(g, tp, "base_color").is_none() && !self.edit_add_component(g, tp) {
+                tracing::warn!(
+                    "inf-editor-core: apply-material refused {g}: it carries no \
+                     `Material` and one could not be inserted (entity gone, or the \
+                     component is not addable)"
+                );
                 continue;
             }
             self.edit_set_prop(g, tp, "base_color", &PropValue::Color(base_color));

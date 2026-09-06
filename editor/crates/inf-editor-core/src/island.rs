@@ -1238,6 +1238,10 @@ pub fn island_scene(design: &inf_island::IslandDesign) -> SceneDoc {
         asset(ids.skeleton),
         asset(ids.mesh),
         asset(ids.machine),
+        Some(crate::scene::doc::CharacterSkin::from_material(
+            asset(ids.material),
+            &crate::character::starter_skin_material(),
+        )),
         feet,
         Some(asset(ids.actor)),
         hero_height_m(),
@@ -2838,6 +2842,10 @@ mod tests {
             ids.skeleton.unwrap().0,
             ids.mesh.unwrap().0,
             ids.machine.unwrap().0,
+            Some(crate::scene::doc::CharacterSkin::from_material(
+                ids.material.unwrap().0,
+                &crate::character::starter_skin_material(),
+            )),
             d.start(START_LIFT_M),
             Some(ids.actor.unwrap().0),
             hero_height_m(),
