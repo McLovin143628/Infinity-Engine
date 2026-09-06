@@ -35007,3 +35007,126 @@ has median 247, so more than half its surface is flagged metallic, and this engi
 has no environment specular for metals, so a metal with no reflection is black.
 That is a LIGHTING gap and it belongs to the PAR arc, which is why it is named
 here and not patched by dropping a channel the material says is there.
+
+
+### ADDITION A — THE SOLES REST ON THE SURFACE (flat ground)
+
+The user sees the feet meeting the pavement wrongly. Measured before anything was
+touched, over 21 samples of each cycle, as the **lowest skinned vertex** of the
+posed body against the model origin — which is the capsule's lowest point, and
+therefore the plane a controller rests it on:
+
+| | idle | walk | run |
+|---|---|---|---|
+| committed male | −5.6 mm | **+29.5 mm** | **+73.7 mm** |
+| committed female | −5.9 mm | **+32.5 mm** | **+79.6 mm** |
+| island hero (rebound mannequin) | **+19.5 mm** | +5.8 mm | +86.6 mm |
+
+**It is a HOVER, not a sink.** A generated cycle is built from swing angles and a
+hip height and nothing in that derivation knows where the soles are; a retargeted
+cycle carries the residue of two rigs' hip heights. Both are ONE constant per
+clip, which is why the fix is one number and not foot IK.
+
+`inf_anim::retarget::settle_to_ground` subtracts it — at the end of the
+derivation and at the end of the retarget — so the cycle's **lowest** frame lands
+where the bind pose puts it. Only the lowest frame is pinned, so the bob, the
+stride and a run's flight phase survive.
+
+The skeleton-only rule was not enough and the number says why: it pins the lowest
+ball/foot JOINT, and a foot rotated at toe-off lifts its sole while its joint
+stays put — the committed walk still planted **29.5 mm** high after it, and the
+mannequin's run then dipped **17.8 mm into the road**. So a second door,
+`settle_to_ground_with_skin`, asks the MESH (the lowest skinned vertex, by the
+same linear-blend arithmetic `skinned_mesh.wgsl` runs) and the two callers that
+have a body take it: the New Character wizard, and `rebind_character_clips`.
+
+**After:**
+
+| | idle | walk | run |
+|---|---|---|---|
+| committed male | +0.0000 m | +0.0004 m | −0.0003 m |
+| committed female | +0.0000 m | +0.0004 m | −0.0005 m |
+| island hero | −1.1 mm | +0.7 mm | +0.1 mm |
+
+Every cycle plants within **1.6 mm** of the surface, against the mandate's 10 mm.
+Photographed at 5× in `08-feet-after-settle-crop.png`: the sole meets the road,
+no gap and no cut. Two gate arms, both mutation-verified (drop the wizard's
+settle and re-bless → walk red at +29.5 mm; drop the retarget's →
+`ground_settle_m` 0.0000 against an 80 mm lift).
+
+**Flat ground only, stated in both doors.** Slopes, stairs and kerbs want a trace
+per foot and a pelvis offset, which is CHAR1b's foot IK.
+
+### ADDITION B — THE COMPLETE CLIP CATALOGUE
+
+**164 of 164.** Every `AnimSequence` the two character packs ship now crosses the
+bridge, up from 136 in CHAR1a. Two filters were dressed as bounds and both are
+gone: the ALS selector named `.../MannequinSkeleton/AnimationExamples` (the
+plugin root is `/ALSV4_CPP`, and overlays, aim sweeps and crouch sets live under
+sibling folders) and the mannequin selector named `/Animations` (the 28 per-bone
+corrective pose sequences live under `Rigs/Poses/`). Imported: **164 clips**, zero
+vacuous retargets.
+
+**CHAR1a's carried 79 — the ten `ALS_CLF_*` refusals — DID NOT REPRODUCE.** All
+16 `ALS_CLF_*` sequences export cleanly, with real files and 31–71 keys each, and
+every one reports `AdditiveAnimationType.AAT_NONE`, so they are not the additive
+case that would explain a refusal. What changed between the runs is the sweep:
+CHAR1a's exported 2.9 GB of Megascans in the same commandlet before reaching
+them, and this one ran the character packs alone. The honest answer is
+**not reproducible, and now diagnosable**: every clip records its
+`additive_anim_type`, `ref_pose_type` and `retarget_source` BEFORE the attempt,
+and a refusal is written into the manifest as
+`"refused: <reason>"` rather than as a boolean.
+
+**The inventory** — 461 assets across the two packs, each with the engine type it
+maps to, carried in the manifest as a new `inventory` section (additive within
+schema v2; the importer's fields are all `#[serde(default)]`):
+
+| class | count | what this engine maps it to |
+|---|---|---|
+| AnimSequence | 164 | exported as `.inf_anim` |
+| PoseAsset | 28 | one-key `AnimClip` per pose |
+| CurveFloat / CurveVector | 21 / 9 | no curve asset; an `.inf_anim` track or an `.inf_sm` param |
+| AnimMontage | 18 | no engine type; an `.inf_sm` state with `on_enter`/`on_exit` |
+| BlendSpace / BlendSpace1D | 8 / 3 | `inf_anim::BlendSpace2D` / `BlendSpace1D` (`Motion::Blend2D`/`Blend1D`) |
+| AnimBlueprint | 8 | reference only — `.inf_sm` + the blueprint graph (the P29 port) |
+| ControlRigBlueprint | 4 | reference only — no control-rig runtime |
+| PhysicsAsset | 3 | no engine type; ragdoll bodies are authored in `inf-physics` |
+| IKRetargeter / IKRigDefinition | 1 / 1 | reference only — `RetargetMap` is derived by NAME |
+| SkeletalMesh / Skeleton | 11 / 6 | already crossed by `add_skeletal_mesh` |
+
+**The gap this names for CHAR1b**: the aim offsets are ADDITIVE blend spaces and
+this engine has no additive layer — `BlendProfile` masks a blend, it does not add
+one. Every `*_Aim_Sweep` clip is across; what is missing is the layer that plays
+it on top of a locomotion pose.
+
+**Which of the user's named sets exist in ALS-Community** (126 sequences), by
+name match over the exported set:
+
+| set | in ALS | examples |
+|---|---|---|
+| walk / run / sprint gaits | 21 / 12 / 6 | `ALS_N_Walk_{F,B,LF,RF,LB,RB}`, `ALS_N_Run_*`, `ALS_N_Sprint_F` |
+| crouch | 20 | the whole `ALS_CLF_*` / `ALS_CRF_*` set |
+| jump | 5 | `ALS_N_JumpLoop`, `ALS_N_JumpWalk_LF`, `ALS_N_JumpRun_RF` |
+| in-air / free-fall | 7 | `ALS_N_FallLoop`, `ALS_N_FallLoop_Fast`, `ALS_N_Falling_LeanPose_*` |
+| land | 5 | `ALS_N_Land_{Light,Heavy}` (+ additive), `ALS_N_LandRoll_F` |
+| roll | 1 | `ALS_N_LandRoll_F` |
+| weapon overlays | 32 | M4A1, Pistol 1H/2H, Bow, Binoculars, Torch, Barrel, Box |
+| ragdoll | 3 | `ALS_Flail`, `ALS_CLF_GetUp_{Front,Back}` |
+| mantling | 3 | `ALS_N_Mantle_1m_LH`, `_1m_RH`, `_2m` |
+| turn in place | 8 | `ALS_{N,CLF}_TurnIP_{L,R}{90,180}` |
+| stops / starts | 8 | `ALS_N_Stop_{L,R}_Down`, `ALS_N_LocoDetail_Accel_*` |
+| look / aim sweeps | 15 | `ALS_N_Look_{U,D,F}_Sweep` + one per weapon |
+| stance variations | 5 | Feminine, Masculine, Injured, HandsTied, Normal |
+| **slide** | **NONE** | — |
+| **throwing** | **NONE** | — |
+| **swimming** | **NONE** | — |
+| **prone** | **NONE** | — |
+| **cover / vault / climb** | **NONE** | — |
+
+So four of the sets the mandate names — **slide, throwing, swimming and prone** —
+**do not exist in ALS-Community at all**, and neither do the cover and vault sets
+COV1 will want. They have to be authored (the P24 wizard can derive a cycle) or
+sourced; CHAR1b starts knowing that rather than looking for them. The
+`ragdoll get-up` set exists only in its CROUCHED-female form
+(`ALS_CLF_GetUp_*`), so a standing get-up is also missing.
