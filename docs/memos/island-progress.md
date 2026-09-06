@@ -34742,3 +34742,268 @@ MetaHumans are any-engine under the mid-2025 terms (shipped in a cooked pack).
 
 **Cleared to ship is not cleared to commit.** Every one of these permits *use*;
 none permits redistributing the source assets in a public repository.
+
+
+## Wave CHAR1a.2 — the bodies, second half (2026-09-05)
+
+The half CHAR1a named and did not land: the MetaHumans through the door that
+turned out to exist, the editor's preview pose, the skinned material handle, the
+female committed body, and the surface — read off the material rather than
+guessed at.
+
+### THE METAHUMANS ARE ASSEMBLED, EXPORTED AND IMPORTED
+
+CHAR1a's carried item 69 said assembly is not headless in UE 5.8 and left the
+user a one-time interactive step. It is retired: **a live editor driven over the
+Python plugin's own remote-execution protocol** does what a commandlet cannot,
+and nobody touched the window.
+
+`tools/ue-export/mh_remote.py` (new) writes `bRemoteExecution=True` into the
+scratch project, boots `UnrealEditor.exe`, discovers the node over multicast,
+opens the TCP command channel and executes `metahuman.py` inside it. The channel
+is synchronous, so a ten-minute assembly is ten minutes of waiting rather than
+log-watching.
+
+**Two boot failures, both measured, both written into the tool:**
+
+| what | what it did |
+|---|---|
+| launched `DETACHED_PROCESS \| CREATE_NEW_PROCESS_GROUP`, stdout on the null device | booted to `LogShaderCompilers: Current jobs: 206`, then **58 s of CPU in 21 minutes**, 0.14 s in an 8 s sample, no file I/O, zero `ShaderCompileWorker` alive, and `EnumWindows` over the pid returned **no window at all** |
+| relaunched with ordinary inherited handles | twelve workers in 20 s… and stalled in the same place again, 37 s of CPU |
+| `-noxgeshadercompile` | **window in ~90 s.** The log says `LogShaderCompilers: Display: Using XGE Controller for shader compilation`; the controller never dispatches on this machine and the boot waits for it for ever, with no error |
+
+The commandlet hang CHAR1a recorded ("46 s of CPU over 14 minutes, zero
+`ShaderCompileWorker` processes") is the same shape, and `-noxgeshadercompile` is
+the answer to both.
+
+**Then it worked, first time:**
+
+| step | measured |
+|---|---|
+| discover + open the command channel | **1.0 s** |
+| `assemble` (both characters, `build_meta_human`, Optimized/High) | **408.8 s**, `success=True` |
+| `INF_MH_STAGE=export-gltf` through the same channel | **38.2 s**, 0 errors |
+
+| what came out | Dominic | Vivian |
+|---|---|---|
+| body mesh | 47 392 / 11 843 / 5 468 / 1 478 tris | identical rungs |
+| body skeleton | **342 joints** | 342 |
+| face mesh | 34 514 / 6 872 / 1 524 / 356 tris | identical |
+| face skeleton | **875 joints** | 875 |
+| material slots | 1 body, 12 face | same |
+
+23 materials, 70 textures, **450.6 MB**, imported into
+`island-build/project/Content/UE/MetaHumans/` in 5.1 s — 4 bodies, 32 textures,
+98.1 MB after the 2048 clamp — with the licence row travelling per pack:
+*MetaHumans [MAY SHIP] … NEVER committed to the engine repository.*
+
+**And the measurement that stops them being the island's hero this wave**: the
+assembled **body mesh is headless**. Its geometry tops out at **y = 1.334 m**
+(Vivian 1.357 m) and the face mesh spans **1.396 – 1.780 m** — they are two
+meshes on two skeletons that share only **32 of 342** joint names. This engine
+draws ONE skinned mesh per entity, so a MetaHuman needs a body+face MERGE onto a
+combined ~1 185-joint rig (or a joint-attached second entity, which a committed
+level cannot gain this wave). Binding the body alone would put a decapitated
+character on the island, which is worse than the mannequin that is there. Carried
+with those numbers.
+
+### THE SURFACE, READ OFF `M_Mannequin` RATHER THAN GUESSED
+
+A UE probe (`MaterialEditingLibrary.get_texture_parameter_names` + each bound
+texture's compression and sRGB) says what the mannequin actually binds:
+
+| parameter | texture | what the bridge USED to call it |
+|---|---|---|
+| `Normal` | `T_*_N` | normal (right) |
+| `BNormal` | `T_*_BN` | **normal** — three maps raced for one slot |
+| `Tangent` | `T_*_Tan` | **normal** — same race |
+| `Base Texture` | `T_*_D` | albedo (fixed at CHAR1a) |
+| `LogoTexture` | `T_UE_Logo_M` | **metallic**, from the `_m$` name rule — the hero's metal mask was the Unreal logo |
+| `MSR_tex` | `T_*_MSR_MSK` | unknown (CHAR1a carried 76) |
+| `AnisoAOPaintMaskTex` | `T_*_AS?AO?MASK_MSK` | `ao` — from the **wrong channel** |
+| `CCCCRTex` | `T_*_CCRCCPlastic_MSK` | unknown |
+
+`BNormal` classified as `normal` because the classifier's substring fallback runs
+over `PARAM_KIND`'s keys and `normal` is a substring of `bnormal`. The exact table
+now carries all eight, and the exact lookup provably precedes the fallback.
+
+**The channel census settles the packing** (every 17th texel of the 4096²
+`T_Manny_01_*` PNGs):
+
+| texture | R | G | B |
+|---|---|---|---|
+| `MSR_MSK` | bimodal 0/255, median **247** — a metal mask | 92–118, mean **95** — UE's 0.5 specular constant | 0/116/255 — the roughness |
+| `ASAOPMASK_MSK` | mean **3.5 of 255** — anisotropy | mean **244**, darker in creases — the AO | bimodal 0/255 — a paint mask |
+| `T_Manny_01_N` | 122–130 | 122–130 | 255 — **nearly flat** |
+| `T_Manny_01_BN` | full 0–255 | full 0–255 | ≥121 — the real relief |
+
+So the importer read the **anisotropy** plane as the ambient occlusion: every
+character across this bridge had its ambient term multiplied by **0.014**. That
+is the single largest reason CHAR1a's hero read dark and streaky, and it was one
+channel index.
+
+`role_to_planes` replaces `role_to_kind`: a role may fill more than one slot and
+may name a channel. `msr` → metallic from R and roughness from B; `aniso_ao_paint`
+→ occlusion from G; `tangent`, `normal_second`, `decal` and `clearcoat` fill
+nothing and are REPORTED as unplaced, which is the ASSET0 rule and what the
+import log now says.
+
+Re-exported and re-imported: 4 materials, **12 textures** (3 slots × 4 materials),
+135.2 MB, 4.5 s, 0 errors.
+
+### THE EDITOR PREVIEWS AN IDLE — AND SHIPPED INERT FOR ONE RUN
+
+`resolve_skinned` gains a fourth input (the entity's `AnimStateMachine`) and a
+rule between the old 3 and 4: no sim pose and no `AnimPlayer` clip ⇒ the
+machine's ENTRY state at t = 0. `resolve_skinned_shared` takes it too and its
+cache key grew the entry clip, so a crowd cannot draw an idle at the tiers that
+pose and a bind pose at the tiers that do not.
+
+**And then the frame caught what the gate could not.** `INDEXED_EXTENSIONS`
+listed `inf_mesh`, `inf_skel` and `inf_anim` — and not **`inf_sm`** — in BOTH
+stores, so `load_payload::<StateMachineAsset>` missed on every real `.inf_sm`,
+the rule fell through to the rest pose, and the viewport looked exactly as it
+had. The gate's arm registers its machine with `insert_state_machine` and never
+touches an index: it proved the rule and could not see the lookup. What saw it
+was a body this wave placed on the island standing in a plain T beside a hero
+that was not.
+
+Fixed (one line per host) and gated from both doors. Measured on committed
+content through the real index: the preview palette differs from the rest palette
+by **1.6514 m** at its worst joint, on a body whose idle moves `hand_l`
+**0.6252 m** down out of its bind T.
+
+### `SkinnedInstance` CARRIES `blend` AND `cutoff`
+
+CHAR1a carried 71, and FIX2's carried 40 with it. The pipeline stands at the
+`max_vertex_attributes: 16` wall exactly, so there is no seventeenth address and
+no sixteenth channel: `pbr.z` is the joint count, `emissive.w` the atlas offset,
+`misc.yzw` the virtual-texture set, `misc.x` the pick id, `color.a` the alpha the
+test reads. **`pbr.w` was the one still zero**, and both ride it as
+`blend * 4 + cutoff` — the multiplier is 4 so a cutoff of exactly 1.0 cannot
+carry into the next code, and the largest packed value is 9.0, whose `f32` ulp is
+2⁻²⁰.
+
+The vertex stage unpacks them into the RIGID path's own `pbr.zw` order, so the
+skinned fragment test is literally mesh.wgsl's two lines. An opaque instance packs
+0.5 where it packed 0.0 and the test rejects both — proven, not assumed, by
+running all 123 golden tests under `INF_GOLDEN_STRICT=1` with the two skinned
+goldens unmoved.
+
+Six construction sites (character + cloth + hair, both hosts), both placeholder
+branches, 18 fixtures, and `projector_mirror`'s field gate raised from 10 to 12.
+
+### THE FEMALE COMMITTED BODY
+
+`samples/starter-character-f/`: the same wizard, the same 161 joint names in the
+same order, eight assets from proportions **measured off `SKM_Quinn`'s exported
+glTF** (joint world bind translations + the mesh's own vertex bounds):
+
+| `BodyParams` | Quinn, measured | Manny, measured | the male default |
+|---|---|---|---|
+| height | **1.8017 m** | 1.8054 m | 1.75 (chosen) |
+| `hip_height_ratio` | 0.9872 / 1.8017 = **0.5480** | 0.5313 | 0.53 |
+| `shoulder_height_ratio` | 1.3956 / 1.8017 = **0.7746** | 0.7817 | 0.82 |
+| `head_height_ratio` | 1.6253 / 1.8017 = **0.9021** | 0.9006 | 0.93 |
+| `shoulder_width_m` | **0.3211** | 0.3802 | 0.40 |
+| `hip_width_m` | **0.2231** | 0.1994 | 0.22 |
+| `arm_length_ratio` | 0.5319 / 1.8017 = **0.2952** | **0.3048** | **0.42** |
+
+A second FOLDER rather than a second `.inf_mesh`, because a body is generated
+FROM its rig: a female skin on a male bind pose would have the right shape and
+the wrong every-pose. 368 350 B beside the male's 368 344; both islands' recipes
+copy it and every 3D template scaffolds both (736 694 B in a new project's
+`Content/Characters/`, measured).
+
+**Two findings the arm forced into the open.** The two committed bodies' heads
+land **2.2 mm apart** — 1.8017 × 0.9021 = 1.6253 against 1.75 × 0.93 = 1.6275 —
+so "these are two rigs" has to be asked of the SHAPE, and the shoulder-to-hip
+ratio answers it (1.44 against 1.82). And `BodyParams::default()`'s
+`arm_length_ratio: 0.42` is **40 % longer than either mannequin measures**: a
+73 cm shoulder-to-wrist on a 1.75 m person against a real 52 cm. It is
+`HAND_OF_HEIGHT` one bone up, it re-blesses the male body and its three derived
+clips, and it is carried with the numbers rather than smuggled into this wave.
+
+### A CROWD CAN WEAR MORE THAN ONE BODY
+
+`society::level_archetype` was singular — "the lowest-`Guid` rigged entity" — so a
+level carrying a man and a woman dressed all thousand of its pedestrians as the
+man. `level_archetypes` surveys every distinct `(mesh, skeleton, machine)` in
+`Guid` order and `level_archetype_for` picks one per agent from its own id under
+`SALT_BODY`, its own salt, so no existing agent's speed, phase, schedule, look or
+build moved. Crowd agents are excluded from the survey: they are rigged entities
+too, and counting them would feed the crowd's output back into its input.
+
+### THE FINDING THE FRAMES FORCED: NOTHING BINDS A CHARACTER'S SKIN
+
+Read off the running editor with `scene_details`, not inferred: the island hero
+carries **Transform, Visibility, SkeletalMesh, AnimStateMachine, RigidBody3D,
+Collider3D — and no `Material`**. `SceneDoc::edit_create_character` has never
+inserted one, so the skin the New Character wizard writes (`Starter_Skin.inf_mat`,
+which `inf-import --rebind-character` fills with the mannequin's own albedo,
+normal and ORM) is bound by NOTHING: both hosts read `Material` → `None`, hand
+`vt_set_for` a `None`, and draw the renderer's neutral 0.8 grey.
+
+**So the editor's "untextured white" and PIE's "grey body with dark limbs" are
+one fact under two lights, not two bugs** — and ASSET0's carried item 22, read as
+"the editor drops the material PIE draws", was a mis-diagnosis. Neither host had
+a material to draw.
+
+The fix is one insert in `edit_create_character` — and it re-blesses every
+committed level that spawns a character, which this wave may not do. So it is
+carried with the exact edit, and the demo loop binds the skin the way an author
+would (`scene_add_component` + `scene_apply_material`, one undo step, never
+saved) so the frames show what the fix will show.
+
+A second finding fell out of it: **`edit_apply_material` skips any target that
+does not already carry a `Material`** and returns a count nobody reads, so
+dragging a material onto a character in the viewport applies to nothing and says
+nothing. Measured: `skin on hero: 0` until the component was added first.
+
+### GATE `char1a_gate.rs` — 8 ARMS → 15, THE SEVEN NEW ONES MUTATION-VERIFIED
+
+| arm | the mutation that turns it red |
+|---|---|
+| the preview pose is the machine's entry clip, not the bind pose | restore `(None, None) => Pose::rest` |
+| …and it resolves through the store's own asset index | drop `"inf_sm"` from `INDEXED_EXTENSIONS` (1.6514 m → 0.0000 m) |
+| `SkinnedInstance` carries blend/cutoff FROM THE MATERIAL, both hosts | hard-code `blend: 0` in the viewport's literal |
+| the female body publishes the same 161 names and a different silhouette | give her the male's 0.40 shoulder span and re-bless |
+| a packed UE mask swizzles into ORM order | swap the MSR channels; put the AO back on plane R |
+| `M_Mannequin`'s parameters map to one role each | delete the `"bnormal"` row |
+| a committed body lit by one sun is not near-black | negate every vertex normal |
+
+The luminance floor is **in the gate** now (CHAR1a carried 74), and the reason it
+is not the island's is not cost: the island's content is gigabytes of licensed
+material outside this repository by law, so no CI leg can open it. Timed anyway —
+the arm costs **1.30 s** (1.41 s alone against 0.11 s for the other fourteen)
+against the 60 s the wave was told to weigh it against. Measured on the committed
+body under one directional sun: **4 255 body pixels, p25 165, median 179**,
+against a floor of 40.
+
+**Goldens 62 → 63.** One added, none moved: `skinned_masked`, eight hair cards
+alternating alpha against a 0.5 cutoff, four discarded, so the committed image is
+a comb and a masked path that drew everything would be a wall.
+
+### THE FRAMES
+
+`tools/demo/demo.ps1` takes NAMED shots now — a wave asked whether the idle looks
+right cannot answer with a picture of a run — and a SETTLED editor frame, because
+CHAR1a's was taken at `Loading world... 27/52` and could not tell an unresolved
+material from a dropped one.
+
+| frame | what it shows |
+|---|---|
+| `01b-editor-settled.png` | the island street at **Streaming 52/52**, the hero and the second committed body, **both in an idle** and neither in a bind pose |
+| `04-pie-idle.png` | the hero close-range, textured, panel seams and specular shaping, arms at rest |
+| `05-pie-walk.png` | mid-stride, with a street NPC beside him |
+| `06-pie-run.png` | the run cycle |
+| `07-pie-street.png` | the street two seconds after the release |
+
+HERO MOVED **17.398 m** over 144 samples, against the loop's 5 m floor.
+
+**What the frames still show and this wave did not fix**, photographed rather
+than described: the mannequin renders very dark in PIE — `MSR_MSK`'s metal mask
+has median 247, so more than half its surface is flagged metallic, and this engine
+has no environment specular for metals, so a metal with no reflection is black.
+That is a LIGHTING gap and it belongs to the PAR arc, which is why it is named
+here and not patched by dropping a channel the material says is there.
