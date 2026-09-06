@@ -10,7 +10,7 @@ Read-only with respect to the user's own Unreal project: nothing here opens it.
         -unattended -nop4 -nosplash -stdout -FullStdOutLogOutput -NoShaderCompile
 
     INF_UE_OUT      where the report is written               (required)
-    INF_MH_STAGE    "prepare" | "export" | "all"              (default "prepare")
+    INF_MH_STAGE    "prepare"|"assemble"|"export"|"all"       (default "prepare")
     INF_MH_MALE     the plugin preset to base him on          (default "Dominic")
     INF_MH_FEMALE   the plugin preset to base her on          (default "Vivian")
     INF_MH_WORK     the content path to work under            (default "/Game/INF")
@@ -190,6 +190,55 @@ def prepare_one(preset, tag):
     return out
 
 
+BUILD_ROOT = os.environ.get("INF_MH_BUILT", "/Game/INF/Built")
+COMMON_ROOT = os.environ.get("INF_MH_COMMON", "/Game/INF/Common")
+
+
+def assemble_one(tag):
+    """ASSEMBLE one prepared character. Needs a LIVE editor -- see the module
+    doc: the pipeline composites its skin through the Texture Graph (an RHI)
+    and creates its assets through the Content Browser (a Slate application),
+    and a commandlet has neither. Driven from the outside by `mh_remote.py`,
+    which boots `UnrealEditor.exe` with a window and speaks the Python
+    plugin's remote-execution protocol to it.
+
+    Idempotent: a character whose `Built` folder already holds a skeletal mesh
+    is reported rather than rebuilt, so a re-run after a partial failure costs
+    a registry scan and nothing else.
+    """
+    ss = subsystem()
+    name = "INF_%s" % tag
+    ch = unreal.load_asset("%s/%s.%s" % (WORK, name, name))
+    if ch is None:
+        raise RuntimeError("%s/%s does not exist -- run the prepare stage first"
+                           % (WORK, name))
+    out = {"name": name, "tag": tag, "built_path": "%s/%s" % (BUILD_ROOT, name)}
+    if not ss.try_add_object_to_edit(ch):
+        raise RuntimeError("try_add_object_to_edit returned False for " + name)
+    try:
+        out["can_build"] = bool(ss.can_build_meta_human(ch, True))
+        params = unreal.MetaHumanCharacterEditorBuildParameters()
+        params.set_editor_property(
+            "pipeline_type", unreal.MetaHumanDefaultPipelineType.OPTIMIZED)
+        params.set_editor_property(
+            "pipeline_quality", unreal.MetaHumanQualityLevel.HIGH)
+        params.set_editor_property("absolute_build_path", BUILD_ROOT)
+        params.set_editor_property("common_folder_path", COMMON_ROOT)
+        params.set_editor_property("name_override", name)
+        params.set_editor_property("enable_wardrobe_item_validation", False)
+        ss.build_meta_human(ch, params)
+    finally:
+        if ss.is_object_added_for_editing(character=ch):
+            ss.remove_object_to_edit(character=ch)
+    unreal.EditorAssetLibrary.save_directory(BUILD_ROOT, only_if_is_dirty=False,
+                                             recursive=True)
+    unreal.EditorAssetLibrary.save_directory(COMMON_ROOT, only_if_is_dirty=False,
+                                             recursive=True)
+    out["built"] = [r for r in built_bodies()
+                    if r["path"].startswith(BUILD_ROOT + "/")]
+    return out
+
+
 def instructions():
     """The one interactive step, printed with the paths already filled in."""
     proj = unreal.Paths.get_project_file_path()
@@ -220,9 +269,10 @@ def instructions():
 def built_bodies():
     """Every skeletal mesh the assembly produced, with its rig's bone count."""
     reg = registry()
-    reg.scan_paths_synchronous([WORK], force_rescan=True)
+    reg.scan_paths_synchronous([WORK, BUILD_ROOT], force_rescan=True)
     rows = []
-    ar = unreal.ARFilter(package_paths=[WORK], recursive_paths=True,
+    ar = unreal.ARFilter(package_paths=[WORK, BUILD_ROOT],
+                         recursive_paths=True,
                          class_names=["SkeletalMesh"])
     for a in reg.get_assets(ar):
         pkg = str(a.get_editor_property("package_name"))
@@ -274,6 +324,12 @@ def run():
             if rec.get("ok"):
                 REPORT["characters"].append(rec["result"])
         REPORT["interactive_step"] = instructions()
+
+    if STAGE in ("assemble", "all"):
+        for tag in (MALE, FEMALE):
+            rec = step("assemble_%s" % tag, lambda t=tag: assemble_one(t))
+            if rec.get("ok"):
+                REPORT["characters"].append(rec["result"])
 
     if STAGE in ("export", "all"):
         step("census_built", lambda: built_bodies())
