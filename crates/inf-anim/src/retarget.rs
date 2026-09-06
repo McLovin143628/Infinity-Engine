@@ -389,7 +389,7 @@ fn retarget_inner(
 /// drives it from the rig's own [`crate::asset::SkeletonAsset::twists`] table
 /// (`crate::drive::drive_twists`). Splitting a source rotation onto it would
 /// fight the driver. They keep their bind and the report says so by name.
-static CHAIN_INFILL: [(&str, &[&str]); 2] = [
+pub static CHAIN_INFILL: [(&str, &[&str]); 2] = [
     ("spine_03", &["spine_04", "spine_05"]),
     ("neck_01", &["neck_02"]),
 ];
