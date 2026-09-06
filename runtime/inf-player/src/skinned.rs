@@ -258,11 +258,29 @@ impl SkinnedRegistry {
         meshes: &[(Uuid, Vec<u8>)],
         skeletons: &[(Uuid, Vec<u8>)],
         clips: &[(Uuid, Vec<u8>)],
+        // **The MACHINES, since the wave CHAR1a audit — and they were missing.**
+        //
+        // `resolve_skinned`'s rule 3 and `resolve_skinned_shared` both ask
+        // `machine_entry_clip`, which asks this store for the `.inf_sm`. Wave
+        // CHAR1a.2 found that lookup broken because `"inf_sm"` was not an indexed
+        // extension, and fixed `Content::Dir` in BOTH hosts — and this store has
+        // THREE content sources. `Content::Memory` is the one a PIE session uses,
+        // it was built from meshes + skeletons + clips, and `ScenePayload` has
+        // carried a `machines` list since P24.1. So every `.inf_sm` lookup missed
+        // in Play, every crowd agent off the pose path fell to `Pose::rest`, and
+        // the street was full of characters standing in the mannequin's bind pose
+        // while the hero beside them ran. Photographed by this audit's demo run:
+        // an NPC with its arms out at 40 degrees below the horizontal (the
+        // mannequin's A-pose bind: `hand_l` at (+0.478, +1.045) from a shoulder at
+        // (+0.190, +1.436)) against the hero's idle, which puts `hand_l` at
+        // (+0.222, +0.894) — nearly straight down.
+        machines: &[(Uuid, Vec<u8>)],
     ) -> Self {
         let map: HashMap<Uuid, Vec<u8>> = meshes
             .iter()
             .chain(skeletons)
             .chain(clips)
+            .chain(machines)
             .cloned()
             .collect();
         Self {

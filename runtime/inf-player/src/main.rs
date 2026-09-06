@@ -566,6 +566,9 @@ fn run_pie_window(
             &payload.meshes,
             &payload.skeletons,
             &payload.clips,
+            // …and the MACHINES (wave CHAR1a audit). Without them every `.inf_sm`
+            // lookup missed in Play and the crowd stood in its bind pose.
+            &payload.machines,
         )),
         // P26.4 (`ScenePayload` v8): the derived material records + the `.inf_tex`
         // containers a PIE session's surfaces sample. Same shape, same reason as

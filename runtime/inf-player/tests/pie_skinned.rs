@@ -263,7 +263,12 @@ fn the_pie_registry_resolves_real_skinned_geometry() {
     let payload = character_payload(true);
     assert_eq!(payload.meshes.len(), 1, "nothing to resolve");
 
-    let store = SkinnedRegistry::from_payload(&payload.meshes, &payload.skeletons, &payload.clips);
+    let store = SkinnedRegistry::from_payload(
+        &payload.meshes,
+        &payload.skeletons,
+        &payload.clips,
+        &payload.machines,
+    );
     let sm = SkeletalMesh {
         mesh: Some(MESH),
         skeleton: Some(SKEL),
@@ -298,7 +303,12 @@ fn the_payload_built_sim_poses_the_character_it_ships() {
     let mut sim = inf_player::sim_from_payload(&payload)
         .expect("the payload builds a sim")
         .sim;
-    let store = SkinnedRegistry::from_payload(&payload.meshes, &payload.skeletons, &payload.clips);
+    let store = SkinnedRegistry::from_payload(
+        &payload.meshes,
+        &payload.skeletons,
+        &payload.clips,
+        &payload.machines,
+    );
     let sm = SkeletalMesh {
         mesh: Some(MESH),
         skeleton: Some(SKEL),

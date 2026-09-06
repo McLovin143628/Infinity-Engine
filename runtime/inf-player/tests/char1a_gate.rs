@@ -885,6 +885,94 @@ fn the_editor_stores_preview_pose_resolves_through_its_own_asset_index() {
     );
 }
 
+/// **AND THROUGH THE THIRD CONTENT SOURCE — THE ONE PLAY ACTUALLY USES**
+/// (wave CHAR1a audit).
+///
+/// `SkinnedRegistry` has three: `Content::Dir` (a `--level` dev run),
+/// `Content::Pack` (a cooked `.ipack`) and `Content::Memory` (a **PIE session**,
+/// built from the `ScenePayload` the editor hands its player subprocess). Wave
+/// CHAR1a.2 found the `.inf_sm` lookup broken, fixed `INDEXED_EXTENSIONS` — which
+/// is `Content::Dir` and nothing else — and wrote an arm that opens a directory.
+///
+/// `from_payload` chained `meshes + skeletons + clips` and **not `machines`**,
+/// though `ScenePayload` has carried a `machines` list since P24.1. So in Play
+/// every `.inf_sm` lookup missed, `machine_entry_clip` answered `None`, and every
+/// crowd agent the ladder took off the pose path drew `Pose::rest`.
+///
+/// Photographed by the audit's own demo run before the fix: a street NPC with its
+/// arms out at about 40 degrees below the horizontal — the mannequin's A-pose
+/// bind, `hand_l` at (+0.478, +1.045) from a shoulder at (+0.190, +1.436) —
+/// standing beside a hero whose idle puts `hand_l` at (+0.222, +0.894), nearly
+/// straight down.
+///
+/// **The mutation**: drop `.chain(machines)` from `from_payload`. `worst` falls
+/// to 0.0000 and this arm goes red. Verified.
+#[test]
+fn the_pie_payloads_store_resolves_a_machine_too() {
+    use inf_ecs::components::{AnimStateMachine, SkeletalMesh};
+    use inf_player::skinned::SkinnedRegistry;
+
+    // The committed female character, read the way the editor reads it when it
+    // builds a payload: bytes keyed by GUID, one list per kind.
+    let dir = repo().join("samples/starter-character-f");
+    let bytes = |name: &str, id: u128| -> (uuid::Uuid, Vec<u8>) {
+        let p = dir.join(name);
+        (
+            uuid::Uuid::from_u128(id),
+            std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display())),
+        )
+    };
+    let meshes = vec![bytes("Starter_F_Body.inf_mesh", 0x5C10_00B2)];
+    let skeletons = vec![bytes("Starter_F.inf_skel", 0x5C10_00B0)];
+    let clips = vec![
+        bytes("Starter_F_Idle.inf_anim", 0x5C10_00B3),
+        bytes("Starter_F_Walk.inf_anim", 0x5C10_00B4),
+        bytes("Starter_F_Run.inf_anim", 0x5C10_00B5),
+    ];
+    let machines = vec![bytes("Starter_F_Locomotion.inf_sm", 0x5C10_00B6)];
+
+    let reg = SkinnedRegistry::from_payload(&meshes, &skeletons, &clips, &machines);
+    let sm = SkeletalMesh {
+        mesh: Some(uuid::Uuid::from_u128(0x5C10_00B2)),
+        skeleton: Some(uuid::Uuid::from_u128(0x5C10_00B0)),
+    };
+    let machine = AnimStateMachine {
+        sm: Some(uuid::Uuid::from_u128(0x5C10_00B6)),
+        ..AnimStateMachine::default()
+    };
+    let rest = reg
+        .resolve_skinned(&sm, None, None, None)
+        .expect("the committed body resolves from a payload");
+    let preview = reg
+        .resolve_skinned(&sm, None, None, Some(&machine))
+        .expect("…and so does its preview");
+    let worst = rest
+        .palette
+        .iter()
+        .zip(preview.palette.iter())
+        .map(|(a, b)| (a.w_axis - b.w_axis).length())
+        .fold(0.0f32, f32::max);
+    eprintln!("PIE payload store: preview vs rest {worst:.4} m");
+    assert!(
+        worst > 0.05,
+        "the PIE payload's store answers the rest pose ({worst:.4} m from it) — \
+         it carries no `.inf_sm`, so every character Play does not pose stands in \
+         its bind pose"
+    );
+
+    // …and the SHARED (crowd) door, which is the one an off-tier agent takes and
+    // therefore the one the street frame is a picture of.
+    let shared = reg
+        .resolve_skinned_shared(&sm, Some(&machine))
+        .expect("the shared palette resolves");
+    assert_eq!(
+        shared.palette[1].to_cols_array(),
+        preview.palette[1].to_cols_array(),
+        "the crowd's shared palette is not the one the per-agent path builds — a \
+         street of bind poses beside a posed hero is what that looks like"
+    );
+}
+
 /// A two-joint rig: a root and one child a metre up.
 fn two_joint_rig() -> Skeleton {
     use inf_anim::skeleton::{Joint, JointTransform};
