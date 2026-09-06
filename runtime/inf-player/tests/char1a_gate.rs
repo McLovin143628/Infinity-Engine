@@ -466,7 +466,7 @@ fn nothing_from_unreal_is_inside_the_checkout() {
     // bridge writes under. A stem is matched against the FILE NAME, so a source
     // file that merely mentions one in a comment (this file, for instance) is
     // not a hit.
-    const UE_STEMS: [&str; 8] = [
+    const UE_STEMS: [&str; 11] = [
         "SKM_Manny",
         "SKM_Quinn",
         "SK_Mannequin",
@@ -475,6 +475,12 @@ fn nothing_from_unreal_is_inside_the_checkout() {
         "ALS_Mannequin_Skeleton",
         "MetaHumanCharacter",
         "ABP_Manny",
+        // The bridge's texture stems (wave CHAR1a audit): `T_Manny_*`,
+        // `T_Quinn_*` and the UE logo mask are what `export.py` writes as PNG,
+        // and a PNG is now scanned.
+        "T_Manny",
+        "T_Quinn",
+        "T_UE_Logo",
     ];
     // Directories a bridge output would land in if somebody pointed it here.
     const UE_DIRS: [&str; 3] = ["ue-staging", "MHForge", "island-build"];
@@ -511,6 +517,13 @@ fn nothing_from_unreal_is_inside_the_checkout() {
                 .extension()
                 .map(|e| e.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
+            // **The image and pack extensions are here since the CHAR1a
+            // audit**, and they were the hole. Measured: planting
+            // `samples/SKM_Manny.inf_mesh` turned this arm red, and planting
+            // `samples/T_Manny_01_D.png` — a Marketplace texture, the single
+            // most likely thing to leak out of a Fab or Megascans pack, and
+            // exactly what `export.py` writes — left it **green**. `.inf_tex`
+            // was covered and the PNG the `.inf_tex` is built FROM was not.
             let is_asset = matches!(
                 ext.as_str(),
                 "uasset"
@@ -523,6 +536,15 @@ fn nothing_from_unreal_is_inside_the_checkout() {
                     | "glb"
                     | "fbx"
                     | "dna"
+                    | "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "tga"
+                    | "exr"
+                    | "hdr"
+                    | "psd"
+                    | "ipack"
+                    | "iasset"
             );
             if !is_asset {
                 continue;
@@ -545,12 +567,13 @@ fn nothing_from_unreal_is_inside_the_checkout() {
         visited > 1_800,
         "the scanner visited only {visited} files — it is not walking the tree"
     );
-    let control = "SKM_Manny_LOD0.gltf";
-    assert!(
-        UE_STEMS.iter().any(|s| control.starts_with(s)),
-        "the matcher does not recognise {control}, so a real intrusion would \
-         also slip past it"
-    );
+    for control in ["SKM_Manny_LOD0.gltf", "T_Manny_01_D.png"] {
+        assert!(
+            UE_STEMS.iter().any(|s| control.starts_with(s)),
+            "the matcher does not recognise {control}, so a real intrusion would \
+             also slip past it"
+        );
+    }
     assert!(
         offenders.is_empty(),
         "content from Unreal is inside the engine checkout — it may never be \
@@ -796,6 +819,69 @@ fn the_preview_pose_resolves_through_the_stores_own_asset_index() {
         "the preview palette is the rest palette ({worst:.4} m apart) — the \
          machine did not resolve through the store's index, so the rule is \
          inert on every real character"
+    );
+}
+
+/// **AND THE EDITOR'S STORE TOO — WHICH IS THE ONE THE DEFECT WAS IN**
+/// (wave CHAR1a audit).
+///
+/// `the_preview_pose_resolves_through_the_stores_own_asset_index` above says, in
+/// its own doc, that `INDEXED_EXTENSIONS` was missing `"inf_sm"` *"in both
+/// hosts"* — and then asks only `inf_player::skinned::SkinnedRegistry`. Measured
+/// by the audit: dropping `"inf_sm"` from
+/// `inf_editor_core::render_assets::INDEXED_EXTENSIONS` and running the whole
+/// gate gives **20 passed, 0 failed**. The arm names the defect it was written
+/// for and cannot see it in the host the demo frame found it in — the viewport.
+///
+/// So the same question, of the other store, through its own public door
+/// (`set_content_root`, which is what the editor calls when a project opens).
+///
+/// **The mutation**: drop `"inf_sm"` from the editor store's
+/// `INDEXED_EXTENSIONS`. `worst` falls from 1.6555 m to 0.0000 and this arm goes
+/// red. Verified — and with this arm present the whole gate goes red for that
+/// mutation, which it did not before.
+#[test]
+fn the_editor_stores_preview_pose_resolves_through_its_own_asset_index() {
+    use inf_ecs::components::{AnimStateMachine, SkeletalMesh};
+    use inf_editor_core::render_assets::EditorRenderAssets;
+
+    let dir = repo().join("samples/starter-character-f");
+    let mut store = EditorRenderAssets::new();
+    store.set_content_root(Some(dir.clone()));
+    assert!(
+        store.index_len() >= 6,
+        "the committed female folder indexed {} assets in the EDITOR store — the \
+         fixture is not reading content",
+        store.index_len()
+    );
+
+    let ids = |n: u128| uuid::Uuid::from_u128(0x5C10_00B0 + n);
+    let sm = SkeletalMesh {
+        mesh: Some(ids(2)),
+        skeleton: Some(ids(0)),
+    };
+    let machine = AnimStateMachine {
+        sm: Some(ids(6)),
+        ..AnimStateMachine::default()
+    };
+    let rest = store
+        .resolve_skinned(&sm, None, None, None)
+        .expect("the committed body resolves in the editor store");
+    let preview = store
+        .resolve_skinned(&sm, None, None, Some(&machine))
+        .expect("…and so does its preview");
+    let worst = rest
+        .palette
+        .iter()
+        .zip(preview.palette.iter())
+        .map(|(a, b)| (a.w_axis - b.w_axis).length())
+        .fold(0.0f32, f32::max);
+    eprintln!("editor store: preview vs rest, through the index: {worst:.4} m");
+    assert!(
+        worst > 0.05,
+        "the EDITOR store's preview palette is its rest palette ({worst:.4} m \
+         apart) — the machine did not resolve through its index, so every \
+         character in the viewport stands in its bind pose"
     );
 }
 
