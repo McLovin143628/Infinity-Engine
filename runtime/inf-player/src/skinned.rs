@@ -78,11 +78,12 @@ use inf_ecs::pose::EvaluatedPose;
 use inf_render::SkinnedMeshData;
 use uuid::Uuid;
 
-// Native only — see `SkinnedRegistry::build_skinned_geometry` and this crate's
-// `Cargo.toml` for why the browser player carries no `inf-mesh`. Gated at the
-// import as well as the item because the wasm CI leg runs with `-D warnings`,
+// `MeshAsset` is a payload type and builds on every target (this crate's
+// `Cargo.toml` says why `inf-mesh` is unconditional): the wasm player decodes it
+// for `build_skinned_sections` even though it draws a placeholder. `SkinnedVertex`
+// is native only — see `SkinnedRegistry::build_skinned_geometry` — and is gated at
+// the import as well as the item because the wasm CI leg runs with `-D warnings`,
 // where an import used by nothing is a build failure.
-#[cfg(not(target_arch = "wasm32"))]
 use inf_mesh::MeshAsset;
 #[cfg(not(target_arch = "wasm32"))]
 use inf_render::SkinnedVertex;
