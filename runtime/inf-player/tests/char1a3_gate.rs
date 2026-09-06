@@ -1036,7 +1036,8 @@ fn a_udim_mesh_splits_into_one_section_per_tile() {
     assert_eq!(
         submeshes.iter().map(|s| s.triangle_count()).sum::<usize>(),
         5,
-        "the whole mesh is re-sectioned by tile — 2 + 2 quad triangles and the          mouth bag, which belongs to tile 1001 with the face"
+        "the whole mesh is re-sectioned by tile — 2 + 2 quad triangles and \
+         the mouth bag, which belongs to tile 1001 with the face"
     );
     assert_eq!(
         submeshes[0].triangle_count(),
