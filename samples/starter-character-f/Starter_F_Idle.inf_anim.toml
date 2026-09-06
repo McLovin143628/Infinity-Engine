@@ -1,7 +1,7 @@
 schema_version = 1
 guid = "00000000-0000-0000-0000-00005c1000b3"
 kind = "anim_clip"
-content_hash = "70a41c13b0df572a07e48c4c370b1aaf"
+content_hash = "bf676b2ad4e9a7ce551be2c19a029400"
 dependencies = ["00000000-0000-0000-0000-00005c1000b0"]
 tags = []
 

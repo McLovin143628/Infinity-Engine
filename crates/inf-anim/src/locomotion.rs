@@ -313,6 +313,22 @@ pub fn build_locomotion(
         &arms,
     );
 
+    // **THE GROUND** (wave CHAR1a.2). A generated cycle is built from swing
+    // angles and a hip height, and nothing in that derivation knows where the
+    // rig's soles are — so the committed body's own walk planted its foot
+    // **29.5 mm above the ground** and its run **73.7 mm** above it, measured
+    // over 21 samples of each cycle. `retarget::settle_to_ground` subtracts one
+    // constant per clip so the cycle's LOWEST foot is where the bind pose puts
+    // it, which is where a sole touches; the bob, the stride and a run's flight
+    // phase are untouched because only the lowest frame is pinned.
+    //
+    // Applied HERE rather than at the wizard, so that every caller of the
+    // derivation gets a grounded cycle and there is one place the rule lives.
+    let (mut idle, mut walk, mut run) = (idle, walk, run);
+    for clip in [&mut idle, &mut walk, &mut run] {
+        crate::retarget::settle_to_ground(clip, &rig.skeleton);
+    }
+
     Ok(LocomotionSet {
         idle,
         walk,

@@ -1305,3 +1305,206 @@ fn gpu_or_skip() -> Option<inf_render::GpuContext> {
         }
     }
 }
+
+/// **THE SOLES REST ON THE SURFACE** (user mandate 2026-09-05 #2, flat ground).
+///
+/// # Where the ground is, in model space
+///
+/// A character's entity transform is its capsule CENTRE and
+/// `inf_ecs::pose::character_drop` subtracts `half_extents.y + radius` before
+/// drawing, so **the model's origin is the capsule's lowest point** — which is
+/// where a controller rests it on flat ground. A body mesh is authored with its
+/// soles at y = 0. So "the soles rest on the surface" is exactly "the lowest
+/// skinned vertex of the posed body sits at y = 0", and any other number is a
+/// hover or a penetration in metres.
+///
+/// # What was measured before this wave
+///
+/// Over 21 samples of each cycle, the **lowest** sole reached:
+///
+/// | | idle | walk | run |
+/// |---|---|---|---|
+/// | committed male | −5.6 mm | **+29.5 mm** | **+73.7 mm** |
+/// | committed female | −5.9 mm | **+32.5 mm** | **+79.6 mm** |
+/// | island hero (rebound mannequin, local) | **+19.5 mm** | +5.8 mm | +86.6 mm |
+///
+/// A generated cycle is built from swing angles and a hip height and nothing in
+/// that derivation knows where the soles are; a retargeted cycle carries the
+/// residue of two rigs' hip heights. Both are one constant per clip, and
+/// `inf_anim::retarget::settle_to_ground` subtracts it — at the end of the
+/// derivation and at the end of the retarget, so every clip that reaches a body
+/// has been settled once.
+///
+/// The tolerance is **10 mm**, which is the mandate's, and it is asked of the
+/// cycle's MINIMUM: a run's flight phase is supposed to be off the ground, and a
+/// rule that pinned every frame would delete it.
+///
+/// **The mutation**: comment out the `settle_to_ground` call in
+/// `locomotion::derive_locomotion` and re-bless. Walk fails at +29.5 mm and run
+/// at +73.7 mm. Verified.
+///
+/// Slopes, stairs and kerbs need per-foot traces — that is CHAR1b's foot IK and
+/// this arm is deliberately about flat ground only.
+#[test]
+fn a_committed_bodys_soles_rest_on_the_ground_plane() {
+    const TOLERANCE_M: f32 = 0.010;
+    for (who, dir, skel, mesh, clips) in [
+        (
+            "male",
+            "samples/starter-character",
+            "Starter.inf_skel",
+            "Starter_Body.inf_mesh",
+            [
+                "Starter_Idle.inf_anim",
+                "Starter_Walk.inf_anim",
+                "Starter_Run.inf_anim",
+            ],
+        ),
+        (
+            "female",
+            "samples/starter-character-f",
+            "Starter_F.inf_skel",
+            "Starter_F_Body.inf_mesh",
+            [
+                "Starter_F_Idle.inf_anim",
+                "Starter_F_Walk.inf_anim",
+                "Starter_F_Run.inf_anim",
+            ],
+        ),
+    ] {
+        let rd = |n: &str| {
+            std::fs::read(repo().join(dir).join(n)).unwrap_or_else(|e| panic!("{dir}/{n}: {e}"))
+        };
+        let sk: inf_anim::SkeletonAsset = inf_asset::decode(&rd(skel)).expect("rig decodes");
+        let ma: inf_mesh::MeshAsset = inf_asset::decode(&rd(mesh)).expect("body decodes");
+        let sd = inf_player::skinned::skinned_mesh_data(&ma).expect("the body has a skin");
+        // The BIND pose first: a mesh whose soles are not at zero would make
+        // every number below meaningless, and this is where that shows.
+        let bind = inf_anim::skinning_matrices(&sk.skeleton, &inf_anim::Pose::rest(&sk.skeleton));
+        let bind_low = lowest_skinned_y(&sd, &bind);
+        assert!(
+            bind_low.abs() < TOLERANCE_M,
+            "{who}: the BIND pose's lowest vertex is {bind_low:+.4} m — the body \
+             is not authored with its soles on the origin, so the capsule's \
+             bottom is not its ground"
+        );
+        for c in clips {
+            let cl: inf_anim::AnimClipAsset = inf_asset::decode(&rd(c)).expect("clip decodes");
+            let mut lowest = f32::INFINITY;
+            for i in 0..=20 {
+                let t = cl.clip.duration as f32 * i as f32 / 20.0;
+                let pose = inf_anim::sample_clip(&sk.skeleton, &cl.clip, t, true);
+                let pal = inf_anim::skinning_matrices(&sk.skeleton, &pose);
+                lowest = lowest.min(lowest_skinned_y(&sd, &pal));
+            }
+            eprintln!("{who} {c}: lowest sole over the cycle {lowest:+.4} m");
+            assert!(
+                lowest.abs() <= TOLERANCE_M,
+                "{who}'s {c} plants its lowest foot {lowest:+.4} m from the \
+                 ground plane, against a 10 mm bar — positive is a character \
+                 walking on air, negative is one whose soles are inside the \
+                 pavement"
+            );
+        }
+    }
+}
+
+/// The lowest Y a skinned body reaches under one palette — linear-blend
+/// skinning, the same arithmetic `skinned_mesh.wgsl` runs, on the CPU.
+fn lowest_skinned_y(mesh: &inf_render::SkinnedMeshData, palette: &[glam::Mat4]) -> f32 {
+    let mut lo = f32::INFINITY;
+    for v in &mesh.vertices {
+        let p = glam::Vec3::from(v.pos);
+        let mut acc = glam::Vec4::ZERO;
+        for k in 0..4 {
+            let w = v.weights[k];
+            if w == 0.0 {
+                continue;
+            }
+            let j = (v.joints[k] as usize).min(palette.len().saturating_sub(1));
+            acc += w * (palette[j] * p.extend(1.0));
+        }
+        lo = lo.min(acc.y);
+    }
+    lo
+}
+
+/// **A RETARGETED CLIP IS SETTLED TOO** — the same rule, at the other door.
+///
+/// The committed clips above are GENERATED; every clip that comes across the
+/// Unreal bridge is RETARGETED, and the island's own hero wears three of those.
+/// So the rule has to hold at both doors or the body the demo photographs is not
+/// the body the gate measured. Built here rather than read off disk, because the
+/// mannequin's clips are licensed content that CI may not hold.
+///
+/// The fixture is the honest shape of the defect: a source rig whose hips sit
+/// **80 mm** higher than the target's, and a clip that copies its root track
+/// across. Before the settle the retargeted cycle hovers by that difference.
+///
+/// **The mutation**: delete the `settle_to_ground` call at the end of
+/// `retarget_clip`. `ground_settle_m` becomes 0.0 and the post-settle assertion
+/// fails at +0.0800 m. Verified.
+#[test]
+fn a_retargeted_clip_is_settled_onto_the_target_rigs_ground_plane() {
+    let dst = manny();
+    // The SAME rig on both sides — a retarget between two copies of one skeleton
+    // is the identity, so anything left over is the clip's own, which is exactly
+    // what this arm is about.
+    let lifted = dst.clone();
+    // A one-key root translation track that LIFTS: the clip says "stand 80 mm
+    // above where you stand", which is what a retarget's hip-height residue
+    // looks like once it has landed on the target rig.
+    let root_t = lifted.joints()[0].local_bind.translation_vec() + glam::Vec3::new(0.0, 0.080, 0.0);
+    let mut track = inf_anim::JointTrack::new(0);
+    track.translation = Some(inf_anim::Vec3Track {
+        times: vec![0.0, 1.0],
+        values: vec![root_t.to_array(), root_t.to_array()],
+        interp: inf_anim::Interpolation::Linear,
+    });
+    let clip = AnimClip::new("lifted", vec![track]);
+
+    let map = RetargetMap::shared_names(&lifted, &dst);
+    let (out, report) = retarget_clip(&clip, &lifted, &dst, &map, true);
+    eprintln!("ground settle {:+.4} m", report.ground_settle_m);
+    assert!(
+        (report.ground_settle_m - 0.080).abs() < 0.002,
+        "the retarget settled {:+.4} m against an 80 mm lift",
+        report.ground_settle_m
+    );
+
+    // …and the settled clip really stands on the target's floor.
+    let rest = inf_anim::Pose::rest(&dst);
+    let bind_low = lowest_ground_joint_y(&dst, &rest);
+    let mut lowest = f32::INFINITY;
+    for i in 0..=20 {
+        let t = out.duration as f32 * i as f32 / 20.0;
+        let pose = inf_anim::sample_clip(&dst, &out, t, true);
+        lowest = lowest.min(lowest_ground_joint_y(&dst, &pose));
+    }
+    assert!(
+        (lowest - bind_low).abs() < 0.002,
+        "the settled clip's lowest foot is {:+.4} m from the bind pose's",
+        lowest - bind_low
+    );
+}
+
+/// The lowest of a rig's ground joints under `pose`, in world space — the same
+/// question `settle_to_ground` asks, asked from outside it.
+fn lowest_ground_joint_y(sk: &Skeleton, pose: &inf_anim::Pose) -> f32 {
+    let mut lo = f32::INFINITY;
+    for name in ["ball_l", "ball_r", "foot_l", "foot_r"] {
+        let Some(i) = sk.index_of(name) else { continue };
+        let mut chain = vec![i as usize];
+        let mut cur = i as usize;
+        while let Some(p) = sk.joint(cur).and_then(|j| j.parent) {
+            chain.push(p as usize);
+            cur = p as usize;
+        }
+        let mut m = glam::Mat4::IDENTITY;
+        for &j in chain.iter().rev() {
+            m *= pose.locals[j].to_mat4();
+        }
+        lo = lo.min(m.w_axis.y);
+    }
+    lo
+}

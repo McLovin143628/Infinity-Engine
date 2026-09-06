@@ -222,9 +222,16 @@ CHARACTERS = [
             MANNEQUIN_DIR + "/Meshes/SKM_Manny.SKM_Manny",
             MANNEQUIN_DIR + "/Meshes/SKM_Quinn.SKM_Quinn",
         ],
+        # The whole folder, not only `/Animations` (wave CHAR1a.2): the 28
+        # per-bone corrective POSE sequences under `Rigs/Poses/{Manny,Quinn}`
+        # are `AnimSequence`s too, and a catalogue that skipped them was
+        # 136 of the 164 sequences these two packs ship.
         "clips": [
-            {"prefix": MANNEQUIN_DIR + "/Animations", "limit": 32},
+            {"prefix": MANNEQUIN_DIR, "limit": 512},
         ],
+        # Wave CHAR1a.2: everything in the folder that is NOT an AnimSequence,
+        # so a wave that has to MAP the catalogue can see what it is mapping.
+        "inventory": [MANNEQUIN_DIR],
     },
     {
         # **THE ASSEMBLED METAHUMANS** (wave CHAR1a.2). Not a fixed asset list
@@ -264,10 +271,16 @@ CHARACTERS = [
                    "manifest row and in each imported asset's sidecar.",
         "ship": True,
         "skeletal": [],
+        # **THE WHOLE PLUGIN, not one folder** (wave CHAR1a.2). The prefix used
+        # to name `.../MannequinSkeleton/AnimationExamples` and a limit of 200,
+        # which is a filter dressed as a bound: overlays, aim offsets, montages
+        # and the crouch sets live under sibling folders and never crossed. The
+        # root is the plugin's mount point and the limit is above the asset
+        # count, so what crosses is what exists.
         "clips": [
-            {"prefix": "/ALSV4_CPP/AdvancedLocomotionV4/CharacterAssets/"
-                       "MannequinSkeleton/AnimationExamples", "limit": 200},
+            {"prefix": "/ALSV4_CPP", "limit": 512},
         ],
+        "inventory": ["/ALSV4_CPP"],
     },
 ]
 
@@ -991,7 +1004,8 @@ def add_clip(pkg, name, pack):
         ERRORS.append("clip not loaded: %s" % path)
         return None
     k = key_of(path)
-    rec = {"key": k, "source": path, "pack": pack, "name": name, "file": None}
+    rec = {"key": k, "source": path, "pack": pack, "name": name, "file": None,
+           "disposition": "pending"}
     CLIPS[path] = rec
     try:
         sk = seq.get_editor_property("skeleton")
@@ -999,6 +1013,18 @@ def add_clip(pkg, name, pack):
         rec["skeleton_bones"] = len(sk.get_editor_property("bone_tree")) if sk else 0
     except Exception as e:
         ERRORS.append("skeleton of %s: %s" % (path, e))
+    # **WHY A CLIP REFUSES** (wave CHAR1a.2, CHAR1a carried 79). Ten
+    # `ALS_CLF_*` sequences returned `run_asset_export_task == False` and the
+    # wave carried them undiagnosed. The properties that decide whether the
+    # glTF exporter can write a sequence at all are recorded BEFORE the attempt,
+    # so a refusal arrives with its own explanation instead of a boolean.
+    for prop, out in (("additive_anim_type", "additive"),
+                      ("ref_pose_type", "ref_pose_type"),
+                      ("retarget_source", "retarget_source")):
+        try:
+            rec[out] = str(seq.get_editor_property(prop))
+        except Exception:
+            pass
     for prop, out in (("sequence_length", "seconds"),
                       ("number_of_sampled_keys", "keys"),
                       ("rate_scale", "rate_scale")):
@@ -1017,9 +1043,22 @@ def add_clip(pkg, name, pack):
             ERRORS.append("gltf clip %s: %s" % (path, e))
         if ok and os.path.isfile(dst):
             rec["file"] = fname
+            rec["disposition"] = "exported"
             rec.update(gltf_facts(dst))
         else:
-            ERRORS.append("clip gltf %s did not write" % path)
+            # **THE DIAGNOSIS, not the boolean.** An ADDITIVE sequence has no
+            # absolute pose of its own -- it is a delta against a base -- and
+            # UE's glTF exporter writes absolute tracks, so it refuses. That is
+            # the whole of CHAR1a's carried 79 and it is now stated per clip.
+            why = "run_asset_export_task returned False"
+            if rec.get("additive", "").endswith("LocalSpaceBase") or \
+                    "AAT_" in rec.get("additive", "") and \
+                    not rec.get("additive", "").endswith("NoAdditive"):
+                why = ("ADDITIVE sequence (%s): it is a delta against a base "
+                       "pose, and the glTF exporter writes absolute tracks"
+                       % rec.get("additive"))
+            rec["disposition"] = "refused: " + why
+            ERRORS.append("clip gltf %s did not write -- %s" % (path, why))
     return k
 
 
@@ -1099,7 +1138,103 @@ def run_characters():
                 except Exception as e:
                     ERRORS.append("%s: %s" % (pkg, e))
             say("  clips %-24s %d" % (sel["prefix"].split("/")[-1], len(hits)))
+        for prefix in pack.get("inventory", []):
+            add_inventory(prefix, pack["name"])
     return packs
+
+
+# ── the animation INVENTORY (wave CHAR1a.2) ─────────────────────────────────
+#
+# An `AnimSequence` crosses this bridge as a `.inf_anim`. Nothing else does —
+# and "nothing else" was invisible, because the sweep only ever asked for
+# sequences. A wave that has to bind fourteen movement modes to clips needs to
+# know what ELSE the source set ships and what this engine would do with each,
+# so the manifest carries a row per asset with a stated mapping rather than a
+# silence.
+#
+# The mappings are this engine's own vocabulary, and each is a fact about a type
+# that exists here rather than a promise:
+#
+#   BlendSpace / BlendSpace1D      -> `inf_anim::BlendSpace1D` / `BlendSpace2D`,
+#                                     which `Motion::Blend1D`/`Blend2D` already
+#                                     play. The SAMPLES are clips we export; the
+#                                     axes and the grid are what would have to be
+#                                     read out of the asset.
+#   AimOffsetBlendSpace(1D)        -> the same blend spaces, ADDITIVE, driven by
+#                                     the look-at angles CHAR1b builds. This
+#                                     engine has no additive layer yet
+#                                     (`BlendProfile` masks a blend, it does not
+#                                     add one) — the gap is named, not hidden.
+#   AnimMontage                    -> no engine type. A montage is sections +
+#                                     notifies over a sequence; the closest thing
+#                                     here is a state in an `.inf_sm` with
+#                                     `on_enter`/`on_exit` events, which is what
+#                                     a mantle or a get-up would become.
+#   PoseAsset                      -> a named pose set; this engine stores a pose
+#                                     as a one-key `AnimClip`, so each pose maps
+#                                     to a clip.
+#   AnimComposite                  -> a sequence list; maps to a state chain.
+#   CurveFloat / AnimCurveCompress -> `inf_anim` has no float-curve asset; a
+#                                     curve reaching the engine would be a
+#                                     `.inf_anim` track or an `.inf_sm` param.
+#   IKRetargeter / IKRigDefinition -> `inf_anim::retarget::RetargetMap`, which is
+#                                     derived from two skeletons by NAME rather
+#                                     than authored — so these are a REFERENCE
+#                                     for a mapping this engine derives.
+#   AnimBlueprint                  -> `.inf_sm` + the blueprint graph. Binary
+#                                     logic; P29 ported its behaviour, not its
+#                                     bytes.
+#   Skeleton / SkeletalMesh        -> already crossed by `add_skeletal_mesh`.
+#
+# Nothing here is exported. The row is the point.
+
+INVENTORY = {}   # object path -> record
+
+ENGINE_MAPPING = {
+    "AnimSequence": "exported as .inf_anim",
+    "BlendSpace": "inf_anim::BlendSpace2D (Motion::Blend2D); samples are clips",
+    "BlendSpace1D": "inf_anim::BlendSpace1D (Motion::Blend1D); samples are clips",
+    "AimOffsetBlendSpace": "additive blend space -- NO additive layer in this engine yet",
+    "AimOffsetBlendSpace1D": "additive blend space -- NO additive layer in this engine yet",
+    "AnimMontage": "no engine type; an .inf_sm state with on_enter/on_exit events",
+    "AnimComposite": "no engine type; a chain of .inf_sm states",
+    "PoseAsset": "one-key AnimClip per pose",
+    "CurveFloat": "no curve asset; an .inf_anim track or an .inf_sm param",
+    "IKRetargeter": "reference only -- retarget::RetargetMap is derived by name",
+    "IKRigDefinition": "reference only -- retarget::RetargetMap is derived by name",
+    "AnimBlueprint": "reference only -- .inf_sm + the blueprint graph (P29 port)",
+    "ControlRigBlueprint": "reference only -- no control-rig runtime",
+    "Skeleton": "crossed with the skeletal mesh (.inf_skel)",
+    "SkeletalMesh": "crossed by add_skeletal_mesh (.inf_mesh + .inf_skel)",
+    "PhysicsAsset": "no engine type; ragdoll bodies are authored in inf-physics",
+}
+
+
+def add_inventory(prefix, pack):
+    """Record every asset under `prefix` with what this engine maps it to."""
+    try:
+        REG.scan_paths_synchronous([prefix], force_rescan=True)
+    except Exception as e:
+        ERRORS.append("inventory scan %s: %s" % (prefix, e))
+        return
+    counts = {}
+    for a in REG.get_assets_by_path(prefix, recursive=True):
+        cls = str(a.asset_class_path.asset_name)
+        counts[cls] = counts.get(cls, 0) + 1
+        path = "%s.%s" % (a.package_name, a.asset_name)
+        if path in INVENTORY:
+            continue
+        INVENTORY[path] = {
+            "key": key_of(path),
+            "source": path,
+            "pack": pack,
+            "class": cls,
+            "engine_mapping": ENGINE_MAPPING.get(cls, "no mapping stated"),
+            "disposition": "exported" if cls == "AnimSequence" else "not a sequence",
+        }
+    for cls in sorted(counts):
+        say("  inv %-26s %4d  %s" % (cls, counts[cls],
+                                     ENGINE_MAPPING.get(cls, "-")))
 
 
 # ── the sweep ────────────────────────────────────────────────────────────────
@@ -1213,6 +1348,11 @@ def run():
         "meshes": sorted(MESHES.values(), key=lambda r: r["key"]),
         "skeletal_meshes": sorted(SKELETAL.values(), key=lambda r: r["key"]),
         "clips": sorted(CLIPS.values(), key=lambda r: r["key"]),
+        # Wave CHAR1a.2: every animation-adjacent asset the character packs
+        # ship, with what this engine maps it to. Read by people and by
+        # CHAR1b's mapping table; the importer ignores it (every manifest field
+        # is `#[serde(default)]`), so it is additive within schema v2.
+        "inventory": sorted(INVENTORY.values(), key=lambda r: r["key"]),
         "materials": sorted(MATERIALS.values(), key=lambda r: r["key"]),
         "fixtures": sorted(FIXTURES.values(), key=lambda r: r["key"]),
         "textures": sorted(TEXTURES.values(), key=lambda r: r["key"]),

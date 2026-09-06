@@ -400,7 +400,10 @@ pub static CHAIN_INFILL: [(&str, &[&str]); 2] = [
 /// produces a clip with no tracks, which plays as a perfect bind pose and is
 /// indistinguishable from a correct retarget of a still character unless
 /// somebody is told. Every list is sorted and deduplicated.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// `PartialEq` but not `Eq` since wave CHAR1a.2: `ground_settle_m` is an `f32`,
+/// and a report that carries a measured length is a report that compares like
+/// one.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ClipRetargetReport {
     /// Tracks the source clip carried.
     pub tracks_in: usize,
@@ -413,6 +416,12 @@ pub struct ClipRetargetReport {
     /// Target joints given a share of a same-chain parent's rotation
     /// ([`CHAIN_INFILL`]).
     pub infilled: Vec<String>,
+    /// **How far the clip was lowered onto the ground plane**, metres (wave
+    /// CHAR1a.2) — see [`settle_to_ground`]. Positive means the retargeted cycle
+    /// was HOVERING and has been dropped; negative means it was cutting into the
+    /// surface and has been lifted; `0.0` means it already stood on it (or the
+    /// rig names no ground joint).
+    pub ground_settle_m: f32,
 }
 
 impl ClipRetargetReport {
@@ -601,6 +610,13 @@ pub fn retarget_clip(
     report.tracks_out = tracks.len();
     let mut out = clip.clone();
     out.tracks = tracks;
+    // **THE GROUND** (wave CHAR1a.2). A retarget lands the target rig's
+    // rotations and a bind-relative root track, and the residue is a constant
+    // vertical error the whole cycle carries — the island's rebound mannequin
+    // hovered 19.5 mm in its idle. `settle_to_ground` subtracts one constant so
+    // the cycle's LOWEST foot is where the bind pose puts it, which is where a
+    // sole touches. One constant, so the bob and the flight phase survive.
+    report.ground_settle_m = settle_to_ground(&mut out, dst);
     for list in [
         &mut report.copied,
         &mut report.dropped,
@@ -610,6 +626,232 @@ pub fn retarget_clip(
         list.dedup();
     }
     (out, report)
+}
+
+/// The joints a body stands on, in the order the ground rule prefers them.
+///
+/// `ball_*` before `foot_*` because a mannequin's `ball` joint is at the toe and
+/// its `foot` joint is at the ankle: the lowest joint of the two is the one a
+/// sole hangs from, and asking for the ankle would answer a number ten
+/// centimetres above the ground. Both are checked and the LOWEST wins, so a rig
+/// with only one of them still answers.
+const GROUND_JOINTS: [&str; 4] = ["ball_l", "ball_r", "foot_l", "foot_r"];
+
+/// How many samples of a cycle the ground rule looks at.
+///
+/// 32, and the number matters: too few and a walk's plant frame falls between
+/// two samples, so the clip is settled to a foot that was still travelling. At
+/// 32 the mannequin's 2.73 s walk is sampled every 85 ms, which is inside the
+/// time a foot spends flat.
+const GROUND_SAMPLES: usize = 32;
+
+/// The world-space Y of `joint` under `pose`, composed down its parent chain.
+fn joint_world_y(sk: &Skeleton, pose: &crate::pose::Pose, joint: usize) -> f32 {
+    let mut chain = vec![joint];
+    let mut cur = joint;
+    while let Some(par) = sk.joints().get(cur).and_then(|j| j.parent) {
+        chain.push(par as usize);
+        cur = par as usize;
+    }
+    let mut m = glam::Mat4::IDENTITY;
+    for &j in chain.iter().rev() {
+        m *= pose.locals[j].to_mat4();
+    }
+    m.w_axis.y
+}
+
+/// The lowest ground joint under `pose`, or `None` when the rig names none.
+fn lowest_ground_joint(sk: &Skeleton, pose: &crate::pose::Pose) -> Option<f32> {
+    let mut lo: Option<f32> = None;
+    for name in GROUND_JOINTS {
+        let Some(i) = sk.index_of(name) else {
+            continue;
+        };
+        let y = joint_world_y(sk, pose, i as usize);
+        lo = Some(lo.map_or(y, |p: f32| p.min(y)));
+    }
+    lo
+}
+
+/// **SETTLE A CLIP ONTO THE GROUND PLANE ITS RIG STANDS ON** (wave CHAR1a.2) —
+/// the flat-ground half of "the feet are on the surface".
+///
+/// # The measurement this exists for
+///
+/// A character's draw origin is its capsule's lowest point
+/// (`inf_ecs::pose::character_drop` subtracts `half_height + radius`), and a
+/// body mesh is authored with its soles at y = 0, so a pose whose lowest foot
+/// sits at the rig's bind height puts the soles exactly on the surface. A
+/// RETARGETED clip does not: the source rig's hips are not the target's, the
+/// root track is copied bind-relative, and the residue is a constant vertical
+/// error for the whole cycle. Measured on the island's rebound mannequin before
+/// this rule existed:
+///
+/// | clip | lowest sole over the cycle |
+/// |---|---|
+/// | `MM_Idle` | **+19.5 mm** — the hero hovers |
+/// | `MM_Walk_Fwd` | +5.8 mm — the planted foot never quite lands |
+/// | `MM_Run_Fwd` | +86.6 mm — a run cycle's flight phase, plus the same error |
+///
+/// # What it does, and what it deliberately does not
+///
+/// It subtracts ONE constant from the root track's Y so that the **minimum**
+/// lowest-foot height over the cycle equals the bind pose's. One constant, so
+/// the bob, the stride and the flight phase are untouched — a run still leaves
+/// the ground, because only its lowest frame is pinned. It is applied at
+/// RETARGET time, so it is data: both hosts read the same clip and cannot
+/// disagree about where a character stands.
+///
+/// It is **not foot IK**. On a slope, a stair or a kerb the two feet want
+/// different heights and this rule has one number; that is CHAR1b's clause and
+/// this one is deliberately bounded to flat ground.
+///
+/// A clip with no ground joints, no root track and no root joint is returned
+/// unchanged with a settle of 0.0 — a rig this rule cannot see is a rig it must
+/// not guess about.
+pub fn settle_to_ground(clip: &mut crate::clip::AnimClip, dst: &Skeleton) -> f32 {
+    use crate::clip::{JointTrack, Vec3Track};
+    let rest = crate::pose::Pose::rest(dst);
+    let Some(bind_y) = lowest_ground_joint(dst, &rest) else {
+        return 0.0;
+    };
+    let Some(root) = dst.joints().iter().position(|j| j.parent.is_none()) else {
+        return 0.0;
+    };
+    let mut min_y = f32::INFINITY;
+    for i in 0..GROUND_SAMPLES {
+        let t = clip.duration as f32 * i as f32 / GROUND_SAMPLES as f32;
+        let pose = crate::sample_clip(dst, clip, t, true);
+        if let Some(y) = lowest_ground_joint(dst, &pose) {
+            min_y = min_y.min(y);
+        }
+    }
+    if !min_y.is_finite() {
+        return 0.0;
+    }
+    let delta = min_y - bind_y;
+    // A millimetre is below what any of this is accurate to, and a settle of
+    // zero must leave the bytes alone so an already-grounded clip is byte-stable.
+    if delta.abs() < 0.001 {
+        return 0.0;
+    }
+    let bind_t = dst.joints()[root].local_bind.translation_vec();
+    let at = match clip.tracks.iter().position(|t| t.joint as usize == root) {
+        Some(i) => i,
+        None => {
+            clip.tracks.push(JointTrack::new(root as u16));
+            clip.tracks.len() - 1
+        }
+    };
+    let track = &mut clip.tracks[at];
+    match &mut track.translation {
+        Some(tr) => {
+            for v in &mut tr.values {
+                v[1] -= delta;
+            }
+        }
+        None => {
+            track.translation = Some(Vec3Track {
+                times: vec![0.0],
+                values: vec![[bind_t.x, bind_t.y - delta, bind_t.z]],
+                interp: crate::clip::Interpolation::Linear,
+            });
+        }
+    }
+    // The track list is kept in joint order, which is what makes a retargeted
+    // `.inf_anim` byte-stable across machines.
+    clip.tracks.sort_by_key(|t| t.joint);
+    delta
+}
+
+/// One skinned vertex, as the ground rule needs to see it: a bind-space
+/// position and its four influences. Deliberately a tuple of plain arrays
+/// rather than a borrowed `SkinnedMeshData` — that type lives in `inf-render`
+/// and this crate is Ring 0 with no renderer edge.
+pub type GroundVertex = ([f32; 3], [u16; 4], [f32; 4]);
+
+/// **The settle, asked of the SOLES rather than the ankles** (wave CHAR1a.2).
+///
+/// [`settle_to_ground`] can only see the skeleton, so it pins the lowest ground
+/// JOINT — and a foot rotated at toe-off lifts its sole while its ball joint
+/// stays put. Measured on the committed body: after the joint settle its walk
+/// still planted **29.5 mm** above the plane, because the number the joint rule
+/// controls is not the number a person sees.
+///
+/// When a caller has the body — the New Character wizard has just generated it,
+/// and the Unreal import has just rebound it — this asks the mesh instead: the
+/// lowest **skinned vertex** over the cycle, by the same linear-blend arithmetic
+/// `skinned_mesh.wgsl` runs. That is exactly "where the sole is".
+///
+/// Returns the additional metres removed (on top of whatever an earlier settle
+/// took), so a caller can report the total.
+pub fn settle_to_ground_with_skin(
+    clip: &mut crate::clip::AnimClip,
+    dst: &Skeleton,
+    verts: &[GroundVertex],
+) -> f32 {
+    use crate::clip::{JointTrack, Vec3Track};
+    if verts.is_empty() {
+        return settle_to_ground(clip, dst);
+    }
+    let Some(root) = dst.joints().iter().position(|j| j.parent.is_none()) else {
+        return 0.0;
+    };
+    let lowest = |pose: &crate::pose::Pose| -> f32 {
+        let pal = crate::skinning_matrices(dst, pose);
+        let mut lo = f32::INFINITY;
+        for (pos, joints, weights) in verts {
+            let p = Vec3::from_array(*pos).extend(1.0);
+            let mut acc = glam::Vec4::ZERO;
+            for k in 0..4 {
+                if weights[k] == 0.0 {
+                    continue;
+                }
+                let j = (joints[k] as usize).min(pal.len().saturating_sub(1));
+                acc += weights[k] * (pal[j] * p);
+            }
+            lo = lo.min(acc.y);
+        }
+        lo
+    };
+    let bind_low = lowest(&crate::pose::Pose::rest(dst));
+    let mut min_y = f32::INFINITY;
+    for i in 0..GROUND_SAMPLES {
+        let t = clip.duration as f32 * i as f32 / GROUND_SAMPLES as f32;
+        min_y = min_y.min(lowest(&crate::sample_clip(dst, clip, t, true)));
+    }
+    if !min_y.is_finite() || !bind_low.is_finite() {
+        return 0.0;
+    }
+    let delta = min_y - bind_low;
+    if delta.abs() < 0.001 {
+        return 0.0;
+    }
+    let bind_t = dst.joints()[root].local_bind.translation_vec();
+    let at = match clip.tracks.iter().position(|t| t.joint as usize == root) {
+        Some(i) => i,
+        None => {
+            clip.tracks.push(JointTrack::new(root as u16));
+            clip.tracks.len() - 1
+        }
+    };
+    let track = &mut clip.tracks[at];
+    match &mut track.translation {
+        Some(tr) => {
+            for v in &mut tr.values {
+                v[1] -= delta;
+            }
+        }
+        None => {
+            track.translation = Some(Vec3Track {
+                times: vec![0.0],
+                values: vec![[bind_t.x, bind_t.y - delta, bind_t.z]],
+                interp: crate::clip::Interpolation::Linear,
+            });
+        }
+    }
+    clip.tracks.sort_by_key(|t| t.joint);
+    delta
 }
 
 #[cfg(test)]

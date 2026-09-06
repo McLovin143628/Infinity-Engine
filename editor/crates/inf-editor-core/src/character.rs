@@ -902,6 +902,43 @@ pub fn build_character_with_ids(
         None,
     )?;
 
+    // ── THE GROUND, asked of the SOLES (wave CHAR1a.2) ─────────────────────
+    //
+    // `derive_locomotion` settles each generated cycle onto the rig's ground
+    // plane already, but it can only see the SKELETON — and a foot rotated at
+    // toe-off lifts its sole while its ball joint stays put. Measured on the
+    // committed body: after the joint settle its walk still planted **29.5 mm**
+    // above the plane and its run **73.7 mm**.
+    //
+    // Here the body exists, so the question can be asked of the mesh: the lowest
+    // SKINNED VERTEX over the cycle, by the same linear-blend arithmetic
+    // `skinned_mesh.wgsl` runs. One constant per clip, so the bob, the stride
+    // and a run's flight phase survive — only the cycle's lowest frame is
+    // pinned, which is where a sole touches.
+    //
+    // This is flat ground and nothing more; per-foot traces on slopes, stairs
+    // and kerbs are CHAR1b's foot IK.
+    let ground_verts: Vec<inf_anim::retarget::GroundVertex> = body
+        .submeshes
+        .iter()
+        .filter(|s| s.is_skinned())
+        .flat_map(|s| {
+            s.vertices
+                .iter()
+                .zip(s.skin.iter())
+                .map(|(v, k)| (v.position, k.joints, k.weights))
+        })
+        .collect();
+    // Silent on purpose: every generated cycle needs some settle (the committed
+    // body's were -5.6 / +29.2 / +74.0 mm, measured), so an advisory per clip
+    // would be three lines of noise on every build and would push the wizard's
+    // pinned advisory list from one entry to four. The RESULT is what matters
+    // and `char1a_gate`'s `a_committed_bodys_soles_rest_on_the_ground_plane`
+    // asserts it, in millimetres.
+    for clip in [&mut set.idle, &mut set.walk, &mut set.run] {
+        inf_anim::retarget::settle_to_ground_with_skin(clip, &rig.skeleton, &ground_verts);
+    }
+
     // ── the clips ──────────────────────────────────────────────────────────
     let skel_bytes = *skeleton.0.as_bytes();
     let clip = |project: &mut AssetProject,
