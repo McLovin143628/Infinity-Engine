@@ -1530,6 +1530,10 @@ const GOLDENS: [&str; 62] = [
     "scatter.png",
     "scatter_impostors.png",
     "selection_gizmo.png",
+    // Wave CHAR1a.2: the masked-skin golden — eight hair cards alternating
+    // alpha against a 0.5 cutoff, four discarded, which is the picture that
+    // proves `SkinnedInstance::blend` reaches the fragment stage.
+    "skinned_masked.png",
     "skinned_mesh.png",
     "sky_dawn.png",
     "sky_dusk.png",

@@ -942,7 +942,8 @@ fn the_female_committed_body_publishes_the_same_161_names() {
     assert_eq!(
         names(&female.skeleton),
         names(&manny()),
-        "the female rig is not the name list `manny::build_manny` publishes —          and that list is the one the first arm pins against the mannequin's own"
+        "the female rig is not the name list `manny::build_manny` publishes — \
+         and that list is the one the first arm pins against the mannequin's own"
     );
 
     // …and she is a DIFFERENT BODY, not a copy: the measured proportions have

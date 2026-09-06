@@ -1951,7 +1951,11 @@ fn the_golden_set_is_pinned_and_additive_after_phase_28() {
     /// adds none.** Wave VIS1a's **audit** adds the fifty-fifth, `water_ssr.png`
     /// — additive, so this pin and the digest below move together and no
     /// committed image changed; `phase26_gate`'s twin carries the reason.
-    const GOLDENS: usize = 62;
+    // 62 -> 63 at wave CHAR1a.2: `skinned_masked.png` was ADDED (eight hair
+    // cards alternating alpha against a 0.5 cutoff, four discarded), and
+    // nothing was re-blessed -- the whole golden binary passes under
+    // `INF_GOLDEN_STRICT=1` with the two existing skinned goldens unmoved.
+    const GOLDENS: usize = 63;
     /// `xxh3_128` over `"{file_name} {hex}\n"` for every golden, name-sorted.
     /// **RULE: this may change only in a commit that adds a golden, or in one
     /// whose stated purpose is to change what the engine LOOKS like.**
@@ -2135,7 +2139,12 @@ fn the_golden_set_is_pinned_and_additive_after_phase_28() {
     // `gi_bleed` (0.044445) and `gi_terrain` (0.028975) among them, which are
     // not adapter diffs at all: they are the wave's own move, and they are the
     // very numbers its own table reports as the "before" of those two frames.
-    const GOLDEN_SET_DIGEST: &str = "cb6c4704b2298cbe0d18729a3d251e29";
+    // `cb6c4704…` -> `2f0b00bc…` at wave CHAR1a.2, and ONLY because a golden was
+    // ADDED: `skinned_masked.png`, the alpha-masked skinned surface
+    // `SkinnedInstance::blend` exists to draw. Nothing was re-blessed — the
+    // whole golden binary passes under `INF_GOLDEN_STRICT=1` and
+    // `git status crates/inf-render/tests/goldens/` listed exactly one new file.
+    const GOLDEN_SET_DIGEST: &str = "2f0b00bc595a72b9228a1814720419db";
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
