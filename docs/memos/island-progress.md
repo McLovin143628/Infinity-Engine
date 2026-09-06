@@ -35130,3 +35130,158 @@ COV1 will want. They have to be authored (the P24 wizard can derive a cycle) or
 sourced; CHAR1b starts knowing that rather than looking for them. The
 `ragdoll get-up` set exists only in its CROUCHED-female form
 (`ALS_CLF_GetUp_*`), so a standing get-up is also missing.
+
+---
+
+## Wave CHAR1a — THE AUDIT (2026-09-06)
+
+Base `origin/main` `6738a039`; the wave ended at `5767feba` (23 commits) and this
+audit at `28ef53ff` (29). Every claim below was reproduced or falsified against the
+tree and the **running hosts**; the full report is the audit's own, and what follows
+is the part that belongs in the tree: **the corrections**, so a later wave inherits
+the measurement and not the sentence.
+
+### THE PRIORITY-ZERO FINDING WAS A ROAD MARKING
+
+The orchestrator read `CHAR1a2-FINAL/01c-editor-both-crop.png` and
+`07-pie-street.png` as showing the second committed body in a T-pose. It is not.
+Booted the shipped release editor on the island, placed her through
+`character_place_starter`, photographed, pressed **undo**, photographed again, and
+differenced: what she adds to the frame is a head, a torso, a belt, two legs and
+**two short arms hanging down at about 45°**. The long white wedges at shoulder
+height are in BOTH frames — they are the **zebra crossing on the road behind her**.
+Confirmed by measurement, three ways: her machine's entry clip moves the worst
+palette joint **1.6514 m** off the bind in the player store, in the editor store, and
+in the running editor host itself (temporary instrumentation, `preview_delta=1.6514`,
+`player=false posed=false agent=None`); the skinned **arm span** goes 0.8852 m →
+**0.4909 m**; `hand_l` goes (−0.692, +1.396) → (−0.325, **+0.890**).
+
+**A crop that is not from the frame beside it is how that argument starts.**
+`CHAR1a2-FINAL/` mixes two runs — the full frames from 22:52, the crops from 21:50,
+an hour and four commits earlier — and the final run wrote to `CHAR1a2-FEET/`, not to
+the folder its report cites. Every frame in `AUDIT-CHAR1a-FINAL/` is from one run.
+
+### THREE CORRECTIONS TO CARRIED ITEMS
+
+**Carried 84 — "this engine has no environment specular for metals, so a metal with
+nothing to reflect is black" — is FALSE.** `crates/inf-render/tests/metal_sky.rs`
+renders one sphere, `metallic = 1`, `roughness = 0.3`, under the P17 atmosphere with
+GI on, from the SHADED hemisphere, twice: rigid on `PrimMesh::Sphere` and skinned
+over the same `sphere_geometry()` vertices on a one-joint identity palette.
+
+```
+rigid   p50 113.04 over 46906 px
+skinned p50 113.04 over 46906 px
+```
+
+Not black; and the two lit paths agree to the last hundredth over the same pixel
+count, because `mesh.wgsl` and `skinned_mesh.wgsl` call one `gi_ambient_specular` —
+whose three layers are the pre-P18.4 constant, P18.4's SH reconstruction along the
+reflection vector **carrying an explicit sky term since FIX3**, and VIS1a's SSR.
+Mutations: zeroing that function gives **p50 1.00 on both**; deleting the call from
+`skinned_mesh.wgsl` alone leaves the rigid reading and fails the agreement. There is
+**no skinned-path divergence and no missing feature to carry**. The mannequin's
+remaining darkness is a property of its MATERIAL — `MSR_MSK`'s metal mask at median
+247 over a street canyon whose reflection vector mostly lands on asphalt — and PAR0 /
+PAR5 inherit that sentence, not the other one.
+
+**Carried 90 — "`-noxgeshadercompile` is now in `mh_remote.py`" — was not true.** The
+wave measured the flag as the only boot that reaches a window (~90 s against a silent
+stall) and did not put the token in the argv; a grep over the whole repository found
+two hits, both in this memo's prose. It is in the tool now.
+
+**Carried 81's PREMISE is wrong: UE 5.8 CAN export a combined body+face mesh.**
+`MetaHumanCharacterExportBlueprintLibrary.h` exposes `ExportGeometry`, and
+`FMetaHumanGeometryExportParams` carries `bHeadSkeletalMesh` / `bBodySkeletalMesh` /
+**`bFullBodySkeletalMesh`**; the last routes to
+`Subsystem->CreateCombinedFaceAndBodyMesh(...)`. `ExportPosedDNA` is a second merged
+route. Two caveats read off the source: the combined mesh gets `ApplyClayMaterial`
+(every slot replaced with `M_FullBody_Clay`, so it exports untextured), and the
+wave's recorded `export_geometry` failure — `Assertion failed:
+CurrentApplication.IsValid()` — was measured in a **commandlet**, while
+`mh_remote.py` now drives a live editor with Slate, which is exactly what that
+assertion demanded. It was never retried through the new door.
+
+**And the blocker carried 81 does not name is the real one.** A skinned mesh binds
+ONE material: `SkinnedMeshData` is one vertex buffer plus one index buffer with no
+sections, `SkinnedInstance` carries scalar colour/metallic/roughness, the pass is one
+draw per mesh, and the pipeline sits at `max_vertex_attributes: 16` **exactly**, so
+there is no channel left for a material index. The MetaHuman face has **12** material
+slots, so the face ALONE cannot be drawn correctly today, merge or no merge. The
+joint palette, by contrast, is a non-problem: `SKINNED_PALETTE_MATRICES` is
+`1 << 18` = **262 144** matrices frame-wide, `SkinnedVertex::joints` is `[u32; 4]`,
+and a 1 185-joint MetaHuman rig is **0.45 %** of the atlas.
+
+### WHAT THE AUDIT FIXED
+
+| finding | commit |
+|---|---|
+| **Nothing bound a character's skin** (carried 82). `edit_create_character` inserted no `Material`; read off the running editor with `scene_details`, the island hero carried `Transform, Visibility, SkeletalMesh, AnimStateMachine, RigidBody3D, Collider3D` and no surface. Both hosts drew the renderer's neutral 0.8 grey. The door takes a `CharacterSkin` now; **four committed levels re-blessed with that cause** (island, island-fixture, blank-3d, hybrid-2.5d), scene **v27 unmoved**, `entity_count` unmoved, each sidecar gaining exactly the skin GUID — which is the fix on disk, because the cook's closure follows that edge. `island_gate`'s material-count pins move 6 → 7. | `f8397f9a` |
+| **`edit_apply_material` skipped in silence** (carried 83) — it `continue`d past any target with no `Material` and returned a count nobody reads. It inserts through `edit_add_component` now (same transaction, one undo) and refuses out loud. | `f8397f9a` |
+| **`character_place_starter` placed a body 0.875 m in the air**: with no `at` it used the pawn's TRANSFORM (a capsule centre) where `at` is the FEET. Measured on the running editor: hero y = 16.5628, placed body y = **17.4636**. | `f8397f9a` |
+| **Play's own store carried no state machines.** `SkinnedRegistry` has three content sources; CHAR1a.2 fixed `INDEXED_EXTENSIONS`, which is `Content::Dir`. `from_payload` chained meshes + skeletons + clips and **not `machines`**, though `ScenePayload` has carried them since P24.1 — so in Play every `.inf_sm` lookup missed and every crowd agent off the pose path drew `Pose::rest`. | `939ee235` |
+| **The preview-idle arm covered one store of two, and not the one the defect was in.** Measured: dropping `"inf_sm"` from the EDITOR store's list and running the whole 20-arm gate gives **20 passed, 0 failed**. | `53760c46` |
+| **The Unreal scanner did not scan textures.** Planting `samples/SKM_Manny.inf_mesh` turned it red; planting `samples/T_Manny_01_D.png` left it **green**. `.inf_tex` was covered and the PNG an `.inf_tex` is built from was not — in a PUBLIC repository, and it is what `export.py` writes by the gigabyte. | `53760c46` |
+| **`ue_import::short_name` silently overwrote one character's textures with another's.** The two MetaHumans' body materials differ only in their fourth underscore segment, which the six-segment tail always drops, so both shortened to `MI_Body_Baked_MI_Body_Baked` and the deterministic texture path overwrote. **32 textures written, 16 files on disk**, every survivor recording a Vivian source and not one Dominic's, with no advisory. | `7d69d9c3` |
+| **`tools/demo/demo.ps1` would not parse under Windows PowerShell 5.1** — 1 284 non-ASCII bytes and no BOM, read as the ANSI code page, three cascading parse errors on a line nobody edited, and the wave-closing loop never launched. The wave's runs went through pwsh. | `458f15fa` |
+| **The demo loop's focus click went to (0, 0)**: `Add-Type -AssemblyName System.Windows.Forms` sat inside the CDP-failure branch, so `$screen` was `$null` on the normal path. | `28ef53ff` |
+| **A killed editor's `crash-recovery.inf_lvl` is silently restored over the shipped level on the next boot**, so every demo run after the first in a session photographed the previous run's document. The loop moves it aside now. | `f8397f9a` |
+| **`*.ps1` / `*.mjs` / `*.cmd` had no `eol=lf` rule** under `core.autocrlf = true`. | `7d69d9c3` |
+
+### WHAT THE AUDIT MEASURED AND CARRIED
+
+* **124 of the 164 exported clips carry TWO animated joints and six channels**
+  (`root` + `VB Curves`) against a 68-bone skeleton. "164 of 164 crossed the bridge"
+  is a file count; three quarters of them are shells, and CHAR1b cannot build
+  movement on them.
+* **The island project holds 656 `.inf_anim` from four un-deduplicated import runs**
+  (656 distinct GUIDs, 134 sources with two byte-different payloads on disk). The
+  clip importer is content-deterministic but not identity-idempotent.
+* **`inf-import --rebind-character` leaves the clips' `skeleton_content_hash` at the
+  pre-rebind value** — the island's four rebound male assets record `8d06c1ee…` while
+  `Starter.inf_skel` hashes `5c7c1647…`, so the editor's content scan prints *"the
+  character animates the wrong bones"* on every boot for content that is correct. A
+  false positive that will hide a true one.
+* **A street NPC draws with straight arms held out from the shoulders while the hero
+  beside it is correctly posed** — photographed at 5× in both audit runs and present
+  in the wave's own `07b-street-npc-crop.png`. The island's rebound clips DO swing
+  the arms (measured over eight phases: span 0.554 m bind → 0.298–0.389 m posed), and
+  fixing the PIE payload's missing `.inf_sm` did not change the frame, so at least
+  one more cause remains in what the sim publishes for a crowd agent.
+* **The editor still draws a character untextured while PIE draws it textured**, with
+  the binding now in the level's own bytes and 21 virtual textures registered for 7
+  bound materials. At `Streaming 52/52`, 45 s settled: editor hero p50 **194.0**,
+  chroma 14.0; PIE hero p50 **81.9**, chroma 12.8 — the same character. ASSET0's
+  carried item 22 is narrowed to "the editor does not resolve a SKINNED surface's
+  virtual textures", not retired.
+* **No imported MetaHuman asset carries its licence text.** The row is in the export
+  manifest and in the printed import report; a grep for `licen` over all 272 imported
+  sidecars returns nothing.
+* **The eaten-continuation gate is Rust-only**, and this wave added two new `.py`
+  files it cannot see — while the P22 law it enforces is about scripted edits, which
+  is what those two files received.
+* **ALS ships ledge climbing as `mantle`** — 13 assets including a `MantleComponent`
+  and two heights. The catalogue's "no cover / vault / climb" row is literally true
+  and reads as more absent than it is.
+* The channel census the surface work rests on **reproduces to the decimal** (MSR R
+  median 247, ASAOPMASK G mean 244.1, R mean 3.5, `_N` flat 122–130, `_BN` full
+  range) — but it is **not in `ue_catalogue2.log`**, which the ledger cites: that file
+  contains no statistics at all. Re-measured off the exported PNGs by the stated
+  method.
+* **Cost**: the fps instrument was run twice at HEAD in one session and gave a
+  1080p lit pipelined estimate of **14.800 ms** and **10.447 ms** — a 42 % run-to-run
+  spread, larger than any delta this wave's shipped render change (one `f32` channel
+  on `pbr.w`) could produce. The `skinned-mesh` pass is **0.4 %** of the lit GPU frame
+  in both runs. An `origin/main`-vs-HEAD A/B was therefore not run, and is stated as
+  not run rather than approximated.
+
+### THE NUMBERS AT `28ef53ff`
+
+`AGGREGATE over 383 binaries: 7179 passed, 0 failed, 21 ignored`, zero warnings,
+`cargo test exit status: 0` (whole workspace, `INF_GOLDEN_STRICT=1`, `-j 3`).
+Goldens **63**, one added by the wave and **none moved** — the two skinned goldens are
+sha256-identical to `origin/main`. rustdoc **409** (ceiling 450, unmoved). clippy
+`-D warnings` clean. `cargo fmt --check` over all 49 packages: no failures;
+`git diff --exit-code` clean. CRLF: **0** carriage returns in the committed blobs of
+all 82 changed text files. Scene **v27**, `ScenePayload` **v13**, `EXPECTED_LEVELS`
+**24**. `char1a_gate` **22 arms**. No new dependency. Nothing pushed.

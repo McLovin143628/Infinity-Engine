@@ -129,7 +129,10 @@ table.
 > mannequins** are Epic's own *UE-Only Content* and are a **local dev reference
 > only** — never cooked, never shipped. The **ALS** clips are **MIT** and may
 > ship with the notice preserved. **MetaHumans** are licensed for any engine
-> under the mid-2025 terms and ship inside the cooked pack.
+> under the mid-2025 terms — `unrealengine.com/en-US/eula/metahuman`, retrieved
+> 2026-09-05 — and ship inside the cooked pack. (The URL is here since the
+> CHAR1a audit: the memo's table carried it and this paragraph did not, and this
+> is the file an author of a derived project reads.)
 >
 > **Cleared to ship is not cleared to commit.** Every one of these licences
 > permits *use*; none permits redistributing the source assets in a public
