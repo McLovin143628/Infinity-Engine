@@ -79,7 +79,7 @@ use std::sync::Arc;
 
 use glam::Mat4;
 use inf_anim::{AnimClip, Skeleton};
-use inf_ecs::components::{AnimPlayer, SkeletalMesh};
+use inf_ecs::components::{AnimPlayer, AnimStateMachine, SkeletalMesh};
 use inf_ecs::pose::EvaluatedPose;
 use inf_mesh::MeshAsset;
 use inf_render::{SkinnedMeshData, SkinnedVertex};
@@ -149,12 +149,20 @@ impl EditorMaterialContent {
     }
 }
 
-/// The key a rest-pose palette is cached under: the `(mesh, skeleton)` pair.
+/// The key a shared palette is cached under: `(mesh, skeleton, entry clip)`.
 ///
 /// A named type rather than an inline tuple because the map it keys is a
 /// `Mutex<HashMap<_, Arc<Vec<Mat4>>>>` on one side of the mirror, which is
 /// exactly the shape `clippy::type_complexity` exists to stop.
-type RestPaletteKey = (Uuid, Uuid);
+///
+/// The third term arrived with wave CHAR1a.2's preview idle. `None` is the rest
+/// pose — every caller before that wave — and `Some(clip)` is that clip's t = 0
+/// pose, which is what `resolve_skinned` builds for an agent carrying the same
+/// state machine. One entry per distinct ANSWER, which is what "derived once per
+/// `(mesh, skeleton)`" was always claiming and could no longer deliver on its
+/// own: two crowds of the same body running different machines share a mesh and
+/// a rig and do not share a pose.
+type RestPaletteKey = (Uuid, Uuid, Option<Uuid>);
 
 /// A skeletal mesh resolved to something the skinned pass can draw.
 #[derive(Clone)]
@@ -201,6 +209,12 @@ pub struct EditorRenderAssets {
     skeletons: HashMap<Uuid, Option<Arc<Skeleton>>>,
     /// Decoded clips by GUID.
     clips: HashMap<Uuid, Option<Arc<AnimClip>>>,
+    /// **Decoded `.inf_sm` machines by GUID** (wave CHAR1a.2) — read for one
+    /// thing only: which clip the ENTRY state plays, so an unplayed character can
+    /// be previewed standing in its idle instead of its bind pose. The machine is
+    /// never stepped here; stepping it is the fixed step's job and this is the
+    /// projection.
+    state_machines: HashMap<Uuid, Option<Arc<inf_anim::StateMachine>>>,
     /// **The rest-pose palette per `(mesh, skeleton)` pair** (wave NPC1b) — the
     /// one a crowd's non-posing tiers all draw.
     ///
@@ -335,6 +349,7 @@ impl EditorRenderAssets {
         self.skinned.retain(|mesh, _| live.contains(mesh));
         self.skeletons.retain(|id, _| live.contains(id));
         self.clips.retain(|id, _| live.contains(id));
+        self.state_machines.retain(|id, _| live.contains(id));
         self.scatter.retain(|mesh, _| live.contains(mesh));
         // **The crowd's shared rest palette is a cache like the others** (NPC1b
         // audit). Wave NPC1b added `rest_palettes` and wired it into none of this
@@ -342,8 +357,11 @@ impl EditorRenderAssets {
         // only grow — the P21 "a pin with no release is a leak with a deadline"
         // shape, and here also a *staleness*: a re-import drops the decoded
         // skeleton and the palette derived from it would have survived.
-        self.rest_palettes
-            .retain(|(mesh, skel), _| live.contains(mesh) && live.contains(skel));
+        self.rest_palettes.retain(|(mesh, skel, entry), _| {
+            live.contains(mesh)
+                && live.contains(skel)
+                && entry.is_none_or(|clip| live.contains(&clip))
+        });
     }
 
     /// Forget one mesh asset's opened payloads (a targeted re-import invalidation).
@@ -359,6 +377,7 @@ impl EditorRenderAssets {
         self.skinned.clear();
         self.skeletons.clear();
         self.clips.clear();
+        self.state_machines.clear();
         self.scatter.clear();
         // The rest palette is DERIVED from a skeleton this line just dropped
         // (NPC1b audit). Left standing it would outlive the bytes it was built
@@ -469,9 +488,12 @@ impl EditorRenderAssets {
     ///     one bound here and whose joint count matches ⇒ **that pose**, because
     ///     an `AnimStateMachine` beats an `AnimPlayer` and this is where "the
     ///     machine wins" stops being a comment;
-    ///  3. no `AnimPlayer`, or one with no clip, or a clip that will not resolve ⇒
-    ///     **rest pose** ([`inf_anim::Pose::rest`]);
-    ///  4. otherwise the clip sampled at the play-head, honouring `looping`.
+    ///  3. no sim pose and no `AnimPlayer` clip, but an `AnimStateMachine` whose
+    ///     entry state names a clip that resolves ⇒ **that clip at t = 0**, the
+    ///     preview idle (wave CHAR1a.2);
+    ///  4. otherwise no `AnimPlayer`, or one with no clip, or a clip that will
+    ///     not resolve ⇒ **rest pose** ([`inf_anim::Pose::rest`]);
+    ///  5. otherwise the clip sampled at the play-head, honouring `looping`.
     ///
     /// Rule 2's two guards are not defensive noise. The projector reads the pose
     /// out of a sim-side store keyed by entity and resolves the skeleton out of
@@ -481,14 +503,32 @@ impl EditorRenderAssets {
     /// frames where it happened. A mismatch falls through to rules 3/4, which is
     /// always a pose the bound skeleton can wear.
     ///
-    /// Rule 3 is what makes a freshly dropped character *visible* rather than
+    /// Rule 4 is what makes a freshly dropped character *visible* rather than
     /// invisible-until-you-press-play, and it is deliberately the same fallback
     /// the components document (`AnimPlayer::clip: None → the bind pose`).
+    ///
+    /// **Rule 3 is why the viewport stopped drawing a bind pose** (wave CHAR1a.2;
+    /// CHAR1a carried it as item 72 with a photograph). Outside Play there is no
+    /// sim pose, and a character authored with a state machine carries no
+    /// `AnimPlayer` at all — so every rig in the editor fell to rule 4 and stood
+    /// in its bind pose: a T on the generated rig, an A on the mannequin's. The
+    /// machine already says what the character does when nothing is happening;
+    /// that is what an entry state IS. Sampling its clip at t = 0 is the smallest
+    /// true answer.
+    ///
+    /// It is **render-side only**: no sim state is read or written, nothing here
+    /// can move a trace byte, and a character the sim IS posing still takes
+    /// rule 2 — so the P29 gates that read sim poses are untouched by it.
+    ///
+    /// Deliberately t = 0 rather than a clock. A preview that animated would make
+    /// two screenshots of the same document differ, and the editor has no
+    /// play-head to be at.
     pub fn resolve_skinned(
         &mut self,
         sm: &SkeletalMesh,
         player: Option<&AnimPlayer>,
         posed: Option<&EvaluatedPose>,
+        machine: Option<&AnimStateMachine>,
     ) -> Option<SkinnedDraw> {
         let mesh_id = sm.mesh?;
         let skeleton_id = sm.skeleton?;
@@ -505,7 +545,13 @@ impl EditorRenderAssets {
                 Some(clip) => inf_anim::sample_clip(&skeleton, &clip, p.t as f32, p.looping),
                 None => inf_anim::Pose::rest(&skeleton),
             },
-            (None, None) => inf_anim::Pose::rest(&skeleton),
+            (None, None) => match self
+                .machine_entry_clip(machine.and_then(|m| m.sm))
+                .and_then(|clip_id| self.clip(clip_id))
+            {
+                Some(clip) => inf_anim::sample_clip(&skeleton, &clip, 0.0, true),
+                None => inf_anim::Pose::rest(&skeleton),
+            },
         };
         Some(SkinnedDraw {
             mesh,
@@ -521,12 +567,23 @@ impl EditorRenderAssets {
     /// the pose path has no [`EvaluatedPose`] — `step_pose_evaluation` rebuilds
     /// the store from the tier's own target set, so a `Far` agent has no entry —
     /// and carries no `AnimPlayer`, so `resolve_skinned` falls through rules 2 and
-    /// 4 to rule 3 and returns exactly this. What changes is how many times it is
-    /// derived: once, instead of once per agent per frame, and the four
-    /// joint-length allocations wall 3 counted stop happening for that tier
-    /// entirely. `the_shared_palette_is_the_one_the_per_agent_path_would_have_built`
-    /// is the arm that keeps the two answers equal.
-    pub fn resolve_skinned_shared(&mut self, sm: &SkeletalMesh) -> Option<SkinnedDraw> {
+    /// 5 and returns exactly this. What changes is how many times it is derived:
+    /// once, instead of once per agent per frame, and the four joint-length
+    /// allocations wall 3 counted stop happening for that tier entirely.
+    /// `the_shared_palette_is_the_one_the_per_agent_path_would_have_built` is the
+    /// arm that keeps the two answers equal.
+    ///
+    /// **It takes the machine since wave CHAR1a.2, and it has to.** The per-agent
+    /// path now prefers a machine's entry pose over the rest pose (rule 3), so a
+    /// crowd whose agents all carry one would draw an idle at the tiers that pose
+    /// and a bind pose at the tiers that do not — one character with two
+    /// silhouettes, swapping at the tier radius. The cache key grew the entry clip
+    /// with it, so it is still one palette per distinct answer.
+    pub fn resolve_skinned_shared(
+        &mut self,
+        sm: &SkeletalMesh,
+        machine: Option<&AnimStateMachine>,
+    ) -> Option<SkinnedDraw> {
         let mesh_id = sm.mesh?;
         let skeleton_id = sm.skeleton?;
         let skeleton = self.skeleton(skeleton_id)?;
@@ -534,24 +591,66 @@ impl EditorRenderAssets {
             return None;
         }
         let mesh = self.skinned_geometry(mesh_id, skeleton_id)?;
+        let entry = self.machine_entry_clip(machine.and_then(|m| m.sm));
         Some(SkinnedDraw {
             mesh,
-            palette: self.rest_palette(&skeleton, (mesh_id, skeleton_id)),
+            palette: self.rest_palette(&skeleton, (mesh_id, skeleton_id, entry)),
             key: (mesh_id, skeleton_id),
         })
     }
 
-    /// The rest-pose palette for one `(mesh, skeleton)` pair, cached.
+    /// The shared palette for one `(mesh, skeleton, entry clip)` triple, cached.
+    ///
+    /// With no entry clip this is the rest pose it has been since NPC1b; with one
+    /// it is that clip's t = 0 pose, which is the answer `resolve_skinned`'s
+    /// rule 3 builds for an agent carrying the same machine. Deriving it here
+    /// rather than at the call site is what keeps the two equal.
     fn rest_palette(&mut self, skeleton: &Skeleton, key: RestPaletteKey) -> Arc<Vec<Mat4>> {
         if let Some(hit) = self.rest_palettes.get(&key) {
             return hit.clone();
         }
-        let built = Arc::new(inf_anim::skinning_matrices(
-            skeleton,
-            &inf_anim::Pose::rest(skeleton),
-        ));
+        let pose = match key.2.and_then(|clip_id| self.clip(clip_id)) {
+            Some(clip) => inf_anim::sample_clip(skeleton, &clip, 0.0, true),
+            None => inf_anim::Pose::rest(skeleton),
+        };
+        let built = Arc::new(inf_anim::skinning_matrices(skeleton, &pose));
         self.rest_palettes.insert(key, built.clone());
         built
+    }
+
+    /// **The entry clip of a state machine**, or `None` when there is no machine,
+    /// no asset, or an entry state that plays something other than a single clip.
+    ///
+    /// MIRROR: keep this byte-identical with the other store's, doc block
+    /// included — `projector_mirror.rs` compares it, because it is the input to
+    /// the preview pose and two hosts that disagreed about it would disagree
+    /// about how an unplayed character stands.
+    ///
+    /// A blend space or a sub-machine returns `None` on purpose: they have no
+    /// single clip to sample at t = 0, and inventing one (the first sample of a
+    /// blend at its default parameter) would be a preview of a pose the machine
+    /// never actually enters.
+    fn machine_entry_clip(&mut self, sm: Option<Uuid>) -> Option<Uuid> {
+        let machine = self.state_machine(sm?)?;
+        let state = machine.states.get(machine.entry)?;
+        match &state.motion {
+            inf_anim::state_machine::Motion::Clip(clip) => Some(Uuid::from_bytes(*clip)),
+            _ => None,
+        }
+    }
+
+    /// A decoded `.inf_sm`, cached (hit or miss) by GUID — the twin of
+    /// [`clip`](Self::clip), for the same reason and with the same negative
+    /// caching.
+    fn state_machine(&mut self, id: Uuid) -> Option<Arc<inf_anim::StateMachine>> {
+        if let Some(hit) = self.state_machines.get(&id) {
+            return hit.clone();
+        }
+        let loaded = self
+            .load_payload::<inf_anim::StateMachineAsset>(id)
+            .map(|a| Arc::new(a.machine));
+        self.state_machines.insert(id, loaded.clone());
+        loaded
     }
 
     /// A decoded skeleton, cached (hit or miss) by GUID.
@@ -1443,7 +1542,7 @@ mod tests {
             skeleton: Some(skel),
         };
         let draw = store
-            .resolve_skinned(&sm, None, None)
+            .resolve_skinned(&sm, None, None, None)
             .expect("rest pose draws");
         assert_eq!(draw.mesh.vertices.len(), 3);
         assert_eq!(draw.mesh.indices, vec![0, 1, 2]);
@@ -1482,8 +1581,8 @@ mod tests {
             mesh: Some(mesh),
             skeleton: Some(skel),
         };
-        let per_agent = store.resolve_skinned(&sm, None, None).unwrap();
-        let shared = store.resolve_skinned_shared(&sm).unwrap();
+        let per_agent = store.resolve_skinned(&sm, None, None, None).unwrap();
+        let shared = store.resolve_skinned_shared(&sm, None).unwrap();
         assert_eq!(*shared.palette, *per_agent.palette);
         assert_eq!(shared.key, per_agent.key);
         assert!(Arc::ptr_eq(&shared.mesh, &per_agent.mesh));
@@ -1491,7 +1590,7 @@ mod tests {
         // …and it is SHARED: two agents get one allocation, which is the thing
         // the atlas deduplicates on. An equality that held while every call
         // allocated a fresh `Vec` would satisfy the arm above and buy nothing.
-        let again = store.resolve_skinned_shared(&sm).unwrap();
+        let again = store.resolve_skinned_shared(&sm, None).unwrap();
         assert!(
             Arc::ptr_eq(&shared.palette, &again.palette),
             "the shared palette was rebuilt — the cache is not a cache"
@@ -1533,12 +1632,12 @@ mod tests {
             skeleton: Some(skel),
         };
 
-        let first = store.resolve_skinned_shared(&sm).unwrap();
+        let first = store.resolve_skinned_shared(&sm, None).unwrap();
         // …and it really is a cache, so the two negatives below mean something.
         assert!(
             Arc::ptr_eq(
                 &first.palette,
-                &store.resolve_skinned_shared(&sm).unwrap().palette
+                &store.resolve_skinned_shared(&sm, None).unwrap().palette
             ),
             "the rest palette is not cached at all, so nothing below is a test of \
              eviction"
@@ -1548,7 +1647,7 @@ mod tests {
         // `drop_loaded`. The old `Arc` is still held here, so its allocation
         // cannot be recycled under the new one — the pointer inequality is real.
         store.clear();
-        let after_clear = store.resolve_skinned_shared(&sm).unwrap();
+        let after_clear = store.resolve_skinned_shared(&sm, None).unwrap();
         assert!(
             !Arc::ptr_eq(&first.palette, &after_clear.palette),
             "`clear` kept the rest palette, so it outlives the skeleton bytes it \
@@ -1560,7 +1659,7 @@ mod tests {
         assert!(
             Arc::ptr_eq(
                 &after_clear.palette,
-                &store.resolve_skinned_shared(&sm).unwrap().palette
+                &store.resolve_skinned_shared(&sm, None).unwrap().palette
             ),
             "the cache stopped caching after `clear`"
         );
@@ -1568,18 +1667,18 @@ mod tests {
         assert!(
             !Arc::ptr_eq(
                 &after_clear.palette,
-                &store.resolve_skinned_shared(&sm).unwrap().palette
+                &store.resolve_skinned_shared(&sm, None).unwrap().palette
             ),
             "`retain_only` kept a rest palette whose skeleton left the document"
         );
         // …and the mesh half of the key counts too: an entry survives only while
         // BOTH halves are live.
-        let held = store.resolve_skinned_shared(&sm).unwrap();
+        let held = store.resolve_skinned_shared(&sm, None).unwrap();
         store.retain_only([skel]);
         assert!(
             !Arc::ptr_eq(
                 &held.palette,
-                &store.resolve_skinned_shared(&sm).unwrap().palette
+                &store.resolve_skinned_shared(&sm, None).unwrap().palette
             ),
             "`retain_only` keyed on the skeleton alone, so a deleted mesh's entry \
              lives for ever"
@@ -1598,7 +1697,10 @@ mod tests {
             skeleton: Some(skel),
         };
 
-        let rest = store.resolve_skinned(&sm, None, None).unwrap().palette;
+        let rest = store
+            .resolve_skinned(&sm, None, None, None)
+            .unwrap()
+            .palette;
         let posed = store
             .resolve_skinned(
                 &sm,
@@ -1610,6 +1712,7 @@ mod tests {
                     t: 0.5,
                     ..AnimPlayer::default()
                 }),
+                None,
                 None,
             )
             .unwrap()
@@ -1628,6 +1731,7 @@ mod tests {
                     ..AnimPlayer::default()
                 }),
                 None,
+                None,
             )
             .unwrap()
             .palette;
@@ -1645,7 +1749,10 @@ mod tests {
             mesh: Some(mesh),
             skeleton: Some(skel),
         };
-        let rest = store.resolve_skinned(&sm, None, None).unwrap().palette;
+        let rest = store
+            .resolve_skinned(&sm, None, None, None)
+            .unwrap()
+            .palette;
         let ghost = store
             .resolve_skinned(
                 &sm,
@@ -1654,6 +1761,7 @@ mod tests {
                     t: 0.5,
                     ..AnimPlayer::default()
                 }),
+                None,
                 None,
             )
             .unwrap()
@@ -1670,7 +1778,7 @@ mod tests {
         store.set_content_root(Some(root));
 
         assert!(store
-            .resolve_skinned(&SkeletalMesh::default(), None, None)
+            .resolve_skinned(&SkeletalMesh::default(), None, None, None)
             .is_none());
         assert!(store
             .resolve_skinned(
@@ -1678,6 +1786,7 @@ mod tests {
                     mesh: Some(mesh),
                     skeleton: None
                 },
+                None,
                 None,
                 None,
             )
@@ -1688,6 +1797,7 @@ mod tests {
                     mesh: Some(Uuid::from_u128(7)),
                     skeleton: Some(skel)
                 },
+                None,
                 None,
                 None,
             )
@@ -1767,14 +1877,17 @@ mod tests {
             ..AnimPlayer::default()
         };
 
-        let rest = store.resolve_skinned(&sm, None, None).unwrap().palette;
+        let rest = store
+            .resolve_skinned(&sm, None, None, None)
+            .unwrap()
+            .palette;
         let from_clip = store
-            .resolve_skinned(&sm, Some(&play), None)
+            .resolve_skinned(&sm, Some(&play), None, None)
             .unwrap()
             .palette;
         let posed = bent_pose(skel);
         let from_sim = store
-            .resolve_skinned(&sm, Some(&play), Some(&posed))
+            .resolve_skinned(&sm, Some(&play), Some(&posed), None)
             .unwrap()
             .palette;
 
@@ -1785,7 +1898,7 @@ mod tests {
         assert_ne!(from_sim[1].to_cols_array(), from_clip[1].to_cols_array());
         // …and with no player at all the sim pose still wins over rest.
         let alone = store
-            .resolve_skinned(&sm, None, Some(&posed))
+            .resolve_skinned(&sm, None, Some(&posed), None)
             .unwrap()
             .palette;
         assert_eq!(alone[1].to_cols_array(), from_sim[1].to_cols_array());
@@ -1804,13 +1917,16 @@ mod tests {
             mesh: Some(mesh),
             skeleton: Some(skel),
         };
-        let rest = store.resolve_skinned(&sm, None, None).unwrap().palette;
+        let rest = store
+            .resolve_skinned(&sm, None, None, None)
+            .unwrap()
+            .palette;
 
         let mut wrong_rig = bent_pose(skel);
         wrong_rig.skeleton = Uuid::from_u128(0xBAD_5CE1);
         assert_eq!(
             store
-                .resolve_skinned(&sm, None, Some(&wrong_rig))
+                .resolve_skinned(&sm, None, Some(&wrong_rig), None)
                 .unwrap()
                 .palette[1]
                 .to_cols_array(),
@@ -1820,7 +1936,7 @@ mod tests {
 
         let wrong_len = short_pose_a_guardless_store_would_wear(skel);
         let drawn = store
-            .resolve_skinned(&sm, None, Some(&wrong_len))
+            .resolve_skinned(&sm, None, Some(&wrong_len), None)
             .unwrap()
             .palette;
         // Both joints, because a short pose that IS worn moves both: the bent root

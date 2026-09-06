@@ -1048,7 +1048,7 @@ fn the_far_to_near_promotion_pop_is_measured() {
              measure"
         );
         fx.skinned
-            .resolve_skinned(&sm, None, posed)
+            .resolve_skinned(&sm, None, posed, None)
             .expect("the character resolves")
             .palette
             .to_vec()
@@ -1064,7 +1064,7 @@ fn the_far_to_near_promotion_pop_is_measured() {
     // whole bucket. Read through the same door the projector uses.
     let rest = fx
         .skinned
-        .resolve_skinned_shared(&sm)
+        .resolve_skinned_shared(&sm, None)
         .expect("the character resolves")
         .palette
         .to_vec();

@@ -2037,6 +2037,8 @@ fn golden_skinned_mesh() {
     let (sk, clip, mesh) = skinned_cylinder();
 
     let make = |palette: std::sync::Arc<Vec<Mat4>>| SkinnedInstance {
+        blend: 0,
+        cutoff: 0.5,
         vt: Default::default(),
         translation: DVec3::ZERO,
         rotation: Quat::IDENTITY,
@@ -2135,6 +2137,8 @@ fn golden_crowd_variation() {
     };
     for (i, (tint, build)) in looks.iter().enumerate() {
         scene.skinned.push(SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             vt: Default::default(),
             translation: DVec3::new(i as f64 * 1.15 - 4.0, 0.0, 0.0),
             rotation: Quat::IDENTITY,
@@ -3330,6 +3334,8 @@ fn the_prepass_sees_a_skinned_character() {
     let mut scene = floor_only.clone();
     scene.skinned_meshes.push(std::sync::Arc::new(mesh));
     scene.skinned.push(SkinnedInstance {
+        blend: 0,
+        cutoff: 0.5,
         vt: Default::default(),
         translation: DVec3::ZERO,
         rotation: Quat::IDENTITY,
@@ -5460,6 +5466,8 @@ fn gi_sees_skinned_and_vgeom_geometry() {
         };
         s.instances.push(floor);
         s.skinned.push(SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             vt: Default::default(),
             translation: DVec3::new(-2.2, 0.0, -1.5),
             rotation: Quat::IDENTITY,

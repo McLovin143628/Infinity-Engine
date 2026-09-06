@@ -417,12 +417,35 @@ pub(crate) fn fill_palette_atlas(
 /// inverse-transpose normal matrix), mirroring `InstanceRaw::pack`.
 ///
 /// `block` is the instance's `(atlas offset, live joint count)`, packed into the
-/// two `f32` channels of the shared instance stream that the skinned path has
-/// never used: `pbr.z` (the rigid path's alpha cutoff — a skinned surface is
-/// opaque and `skinned_mesh.wgsl`'s fragment reads only `pbr.xy`) and
-/// `emissive.w` (reserved on **both** paths since P7.1, and dropped by both
-/// vertex stages). Both values are integers well under `2^24`, so the `f32`
-/// round-trip is exact rather than approximately exact.
+/// two `f32` channels of the shared instance stream that the skinned path had
+/// never used: `pbr.z` (the rigid path's alpha cutoff) and `emissive.w`
+/// (reserved on **both** paths since P7.1, and dropped by both vertex stages).
+/// Both values are integers well under `2^24`, so the `f32` round-trip is exact
+/// rather than approximately exact.
+///
+/// # `pbr.w` carries the blend code AND the cutoff (wave CHAR1a.2)
+///
+/// The sentence above used to end "— a skinned surface is opaque", and that was
+/// the whole defect: hair cards, eyelashes and a cut-out garment are skinned
+/// surfaces that are *not* opaque, and there was no channel left to say so. This
+/// pipeline is at the `max_vertex_attributes: 16` wall exactly
+/// (`docs/memos/p26-5-vertex-streams.md`), so there is no seventeenth address and
+/// no sixteenth channel — `pbr.z` is the joint count, `emissive.w` the atlas
+/// offset, `misc.yzw` the virtual-texture set, `misc.x` the pick id, `color.a`
+/// the alpha the test reads. `pbr.w` is the one that was still zero.
+///
+/// So both ride it: **`blend * 4.0 + cutoff`**, with `cutoff` clamped to
+/// `[0, 1]`. The multiplier is 4 rather than 2 so that `cutoff == 1.0` cannot
+/// carry into the next blend code; `floor(w / 4)` recovers the code and the
+/// remainder is the threshold, and both are exact in `f32` (the largest value is
+/// 9.0, whose ulp is 2⁻²⁰). The vertex stage unpacks them into `pbr.zw` in the
+/// **rigid path's own order** — `z` the cutoff, `w` the code — so the two
+/// fragment stages read a masked surface with the identical two lines.
+///
+/// An opaque instance packs `0 * 4 + 0.5 = 0.5` where it used to pack `0.0`. The
+/// fragment's test is `w > 0.5 && w < 1.5`, which `0.0` and `0.5` both fail, so
+/// every committed skinned golden renders the identical pixels — proven, not
+/// assumed, by running them under `INF_GOLDEN_STRICT=1`.
 fn instance_raw(origin: &FloatingOrigin, inst: &SkinnedInstance, block: (u32, u32)) -> InstanceRaw {
     let model = origin.model_matrix(inst.translation, inst.rotation, inst.scale);
     let inv_scale = inst.scale.max(glam::Vec3::splat(1e-6)).recip();
@@ -443,7 +466,12 @@ fn instance_raw(origin: &FloatingOrigin, inst: &SkinnedInstance, block: (u32, u3
             let s = inst.vt.slots();
             [inst.id, s[0], s[1], s[2]]
         },
-        pbr: [inst.metallic, inst.roughness, block.1 as f32, 0.0],
+        pbr: [
+            inst.metallic,
+            inst.roughness,
+            block.1 as f32,
+            inst.blend as f32 * 4.0 + inst.cutoff.clamp(0.0, 1.0),
+        ],
         emissive: [
             inst.emissive[0],
             inst.emissive[1],
@@ -995,6 +1023,8 @@ mod tests {
 
     fn instance(mesh: usize, palette: Arc<Vec<glam::Mat4>>) -> SkinnedInstance {
         SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             translation: glam::DVec3::ZERO,
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::ONE,

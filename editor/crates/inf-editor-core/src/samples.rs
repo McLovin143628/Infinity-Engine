@@ -10651,9 +10651,134 @@ pub fn starter_character_files() -> Result<(Vec<(String, Vec<u8>)>, Vec<String>)
     // `Starter (1).inf_skel` and quietly produce a different file set.
     let _ = std::fs::remove_dir_all(&scratch);
     std::fs::create_dir_all(&scratch).map_err(|e| format!("scratch dir: {e}"))?;
-    let out = starter_character_into(&scratch);
+    let out = starter_character_into(
+        &scratch,
+        &starter_character_spec(),
+        &starter_character_ids(),
+    );
     let _ = std::fs::remove_dir_all(&scratch);
     out
+}
+
+/// **THE FEMALE COMMITTED BODY** (wave CHAR1a.2) — the same wizard, the same
+/// rig contract, a different set of measured proportions.
+///
+/// # Why a second FOLDER and not a second body in the first one
+///
+/// A body is generated FROM its rig: `manny::build_manny` places every joint
+/// from [`BodyParams`] and the mesh is tubes around those joints. So a female
+/// body needs a female-proportioned *skeleton*, and committing only a second
+/// `.inf_mesh` beside the male's would be a female skin bound to a male bind
+/// pose — the shape would be right and every pose would be wrong. The rig is
+/// what differs, so the character is what is committed: eight assets, the same
+/// **161 joint names in the same order**, which is the interchange contract this
+/// wave exists to hold. `samples/starter-character/`'s own generator also
+/// *deletes* anything it did not write, so a second body in that folder could
+/// not survive a bless.
+///
+/// # Where the numbers come from — every one measured, none invented
+///
+/// Read off `SKM_Quinn`'s exported glTF (`skins[0].joints` composed to world
+/// bind translations, and the mesh's own vertex bounds), 2026-09-05:
+///
+/// | `BodyParams` field | Quinn, measured | here |
+/// |---|---|---|
+/// | height (vertex bounds) | **1.8017 m** | 1.8017 |
+/// | `hip_height_ratio` (`pelvis` y / h) | 0.9872 / 1.8017 = **0.5480** | 0.5480 |
+/// | `shoulder_height_ratio` (`spine_05` y / h) | 1.3956 / 1.8017 = **0.7746** | 0.7746 |
+/// | `head_height_ratio` (`head` y / h) | 1.6253 / 1.8017 = **0.9021** | 0.9021 |
+/// | `shoulder_width_m` (`upperarm_l` ↔ `upperarm_r`) | **0.3211 m** | 0.3211 |
+/// | `hip_width_m` (`thigh_l` ↔ `thigh_r`) | **0.2231 m** | 0.2231 |
+/// | `arm_length_ratio` (shoulder→wrist chain / h) | 0.5319 / 1.8017 = **0.2952** | 0.2952 |
+/// | `upper_limb_ratio` | arm **0.5094**, leg **0.5231** | 0.52 |
+///
+/// `upper_limb_ratio` is one parameter over two chains and cannot equal both, so
+/// the default 0.52 is kept — it lies between the two measurements — rather than
+/// picking a side and calling it measured.
+///
+/// **The shape difference is real and it is Quinn's**: against Manny's own
+/// measurements (0.3802 m shoulders, 0.1994 m hips at 1.8054 m) she is 15.5 %
+/// narrower across the shoulders and 12.1 % wider across the hips *as a fraction
+/// of height*. That is the whole point of a second body.
+///
+/// **What is NOT changed here, and is a finding rather than a decision**:
+/// `BodyParams::default()` — the male starter and every wizard default — carries
+/// `arm_length_ratio: 0.42` where BOTH mannequins measure 0.30 (Manny 0.3048,
+/// Quinn 0.2952). A 1.75 m person's shoulder-to-wrist is about 52 cm; 0.42
+/// makes it 73 cm. It is the `HAND_OF_HEIGHT` defect one bone up and it is
+/// carried with its numbers rather than fixed here, because moving a wizard
+/// default re-blesses the male body, its three derived clips, its machine and
+/// two pinned advisories — a bless this wave is not the place for.
+pub fn starter_character_f_ids() -> crate::character::CharacterIds {
+    let id = |n: u128| Some(inf_asset::AssetId(Uuid::from_u128(0x5C10_00B0 + n)));
+    crate::character::CharacterIds {
+        skeleton: id(0),
+        material: id(1),
+        mesh: id(2),
+        idle: id(3),
+        walk: id(4),
+        run: id(5),
+        machine: id(6),
+        actor: id(7),
+    }
+}
+
+/// What the female committed character is called — the prefix on every one of
+/// its files.
+pub const STARTER_CHARACTER_F_NAME: &str = "Starter_F";
+
+/// The repo-root `samples/starter-character-f/` directory.
+pub fn starter_character_f_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../samples/starter-character-f")
+}
+
+/// The spec the female body is built from — see [`starter_character_f_ids`] for
+/// where every number was measured.
+pub fn starter_character_f_spec() -> crate::character::CharacterSpec {
+    crate::character::CharacterSpec {
+        name: STARTER_CHARACTER_F_NAME.to_string(),
+        params: inf_anim::BodyParams {
+            height_m: 1.8017,
+            hip_height_ratio: 0.5480,
+            shoulder_height_ratio: 0.7746,
+            head_height_ratio: 0.9021,
+            shoulder_width_m: 0.3211,
+            hip_width_m: 0.2231,
+            arm_length_ratio: 0.2952,
+            ..inf_anim::BodyParams::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// [`starter_character_files`] for the female body.
+#[allow(clippy::type_complexity)]
+pub fn starter_character_f_files() -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), String> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let scratch = std::env::temp_dir().join(format!(
+        "inf-starter-character-f-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(&scratch).map_err(|e| format!("scratch dir: {e}"))?;
+    let out = starter_character_into(
+        &scratch,
+        &starter_character_f_spec(),
+        &starter_character_f_ids(),
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+    out
+}
+
+/// Write the committed female character.
+pub fn write_starter_character_f() -> Result<(), String> {
+    write_character_folder(
+        &starter_character_f_dir(),
+        starter_character_f_files()?,
+        STARTER_CHARACTER_F_README,
+    )
 }
 
 /// The half of [`starter_character_files`] that can fail, so the scratch
@@ -10661,15 +10786,13 @@ pub fn starter_character_files() -> Result<(Vec<(String, Vec<u8>)>, Vec<String>)
 #[allow(clippy::type_complexity)]
 fn starter_character_into(
     scratch: &std::path::Path,
+    spec: &crate::character::CharacterSpec,
+    ids: &crate::character::CharacterIds,
 ) -> Result<(Vec<(String, Vec<u8>)>, Vec<String>), String> {
     let mut project =
         crate::assets::AssetProject::open(scratch).map_err(|e| format!("scratch project: {e}"))?;
-    let build = crate::character::build_character_with_ids(
-        &mut project,
-        &starter_character_spec(),
-        &starter_character_ids(),
-    )
-    .map_err(|e| format!("the starter character does not build: {e}"))?;
+    let build = crate::character::build_character_with_ids(&mut project, spec, ids)
+        .map_err(|e| format!("the starter character does not build: {e}"))?;
     let dir = scratch.join(crate::character::CHARACTER_FOLDER);
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("read scratch: {e}"))? {
@@ -10690,9 +10813,23 @@ fn starter_character_into(
 
 /// Write the committed starter character.
 pub fn write_starter_character() -> Result<(), String> {
-    let dir = starter_character_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
-    let (files, _advisories) = starter_character_files()?;
+    write_character_folder(
+        &starter_character_dir(),
+        starter_character_files()?,
+        STARTER_CHARACTER_README,
+    )
+}
+
+/// Write one committed character folder: the wizard's files, its README, and
+/// nothing else (wave CHAR1a.2 — two folders now share this).
+#[allow(clippy::type_complexity)]
+fn write_character_folder(
+    dir: &std::path::Path,
+    built: (Vec<(String, Vec<u8>)>, Vec<String>),
+    readme: &str,
+) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;
+    let (files, _advisories) = built;
     // Anything the generator no longer writes goes, so a renamed asset does not
     // leave its predecessor behind for the sidecar scan to promote.
     for entry in std::fs::read_dir(&dir).map_err(|e| format!("read samples dir: {e}"))? {
@@ -10708,8 +10845,7 @@ pub fn write_starter_character() -> Result<(), String> {
     for (name, bytes) in &files {
         std::fs::write(dir.join(name), bytes).map_err(|e| format!("write {name}: {e}"))?;
     }
-    std::fs::write(dir.join("README.md"), STARTER_CHARACTER_README)
-        .map_err(|e| format!("write readme: {e}"))?;
+    std::fs::write(dir.join("README.md"), readme).map_err(|e| format!("write readme: {e}"))?;
     Ok(())
 }
 
@@ -10734,6 +10870,33 @@ const STARTER_CHARACTER_README: &str = concat!(
     "Two things ship it: `ProjectTemplate::starter_content` scaffolds it into\n",
     "every new 3D project, and `samples/island*/island.toml` names it under\n",
     "`[content]` so the island's hero is this character rather than a capsule.\n",
+    "\n",
+    "Generated - do not hand-edit. Regenerate with:\n",
+    "\n",
+    "```sh\n",
+    "INF_BLESS_SAMPLES=1 cargo test -p inf-editor-core samples\n",
+    "```\n",
+);
+
+const STARTER_CHARACTER_F_README: &str = concat!(
+    "# Starter character (female)\n",
+    "\n",
+    "**The engine's second committed body** - the same New Character wizard, the\n",
+    "same 161-bone rig and the same eight assets as `../starter-character/`, built\n",
+    "from a different set of MEASURED proportions.\n",
+    "\n",
+    "Every number in the spec was read off `SKM_Quinn`'s exported glTF on\n",
+    "2026-09-05 (joint world bind translations + the mesh's own vertex bounds):\n",
+    "1.8017 m tall, hips at 0.5480, shoulders at 0.7746, head at 0.9021, a\n",
+    "0.3211 m shoulder span and a 0.2231 m hip span. Against Manny's own\n",
+    "measurements she is 15.5% narrower across the shoulders and 12.1% wider\n",
+    "across the hips as a fraction of height.\n",
+    "\n",
+    "**Nothing from Unreal is in these files.** The mannequin was MEASURED; the\n",
+    "geometry is this engine's own generator, vertex for vertex.\n",
+    "\n",
+    "Both bodies publish the same 161 joint names in the same order, which is\n",
+    "what lets one clip play on either — see `char1a_gate.rs`.\n",
     "\n",
     "Generated - do not hand-edit. Regenerate with:\n",
     "\n",
@@ -11328,6 +11491,10 @@ mod tests {
             // Before the island: the island's hero IS this character, and its
             // levels name these eight GUIDs.
             write_starter_character().expect("regenerate the starter character");
+            // The FEMALE body (wave CHAR1a.2): the second committed body on the
+            // same rig contract. Beside the male rather than after the island,
+            // for the same reason — a project that scaffolds one scaffolds both.
+            write_starter_character_f().expect("regenerate the female starter character");
             // …and before the island for the same reason: the island's four
             // TerrainLayers name four of these material GUIDs (TER2a clause 3).
             crate::ground::write_ground_library(&ground_dir())

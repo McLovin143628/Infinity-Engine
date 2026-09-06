@@ -1187,7 +1187,8 @@ fn import_material(
     // in the report, and one of the silent roles was clobbering the albedo.
     let mut unplaced: Vec<&str> = Vec::new();
     for (role, key) in &mat.maps {
-        let Some(kind) = role_to_kind(role) else {
+        let targets = role_to_planes(role);
+        if targets.is_empty() {
             unplaced.push(role.as_str());
             continue;
         };
@@ -1211,7 +1212,21 @@ fn import_material(
             .map_err(|e| AssetError::Import(format!("{}: {e}", path.display())))?;
         let (rgba, w, h) = inf_material::downscale_rgba8(rgba, w, h, opts.max_texture)
             .map_err(|e| AssetError::Import(format!("{}: {e}", path.display())))?;
-        planes.insert(kind, (rgba, w, h));
+        // One source texture may fill more than one slot (a packed UE mask), and
+        // a slot a role already claimed is NOT overwritten — a dedicated
+        // `roughness` map beats the roughness channel of a packed mask, and the
+        // walk is `BTreeMap`-ordered so which one that is is a property of the
+        // manifest rather than of an iteration.
+        for (kind, channel) in targets {
+            if planes.contains_key(kind) {
+                continue;
+            }
+            let plane = match channel {
+                Some(c) => broadcast_channel(&rgba, *c),
+                None => rgba.clone(),
+            };
+            planes.insert(*kind, (plane, w, h));
+        }
     }
     if !unplaced.is_empty() {
         report.advisories.push(format!(
@@ -1371,11 +1386,11 @@ fn stem_kind(stem: &str) -> Option<inf_material::ground::GroundKind> {
         .find(|k| k.stem() == stem)
 }
 
-/// A manifest role name → the engine's [`MapKind`].
+/// A manifest role name → the engine's [`MapKind`]s, with a channel each.
 ///
-/// **Exactly the five roles this engine has somewhere to put**, and nothing
-/// else: albedo and normal get their own slot, and occlusion/roughness/metallic
-/// are packed into the one ORM. A role absent from this table is reported by
+/// **Exactly the roles this engine has somewhere to put**, and nothing else:
+/// albedo and normal get their own slot, and occlusion/roughness/metallic are
+/// packed into the one ORM. A role absent from this table is reported by
 /// [`import_material`] rather than dropped in silence.
 ///
 /// `displacement` is deliberately absent: this engine has no displacement slot
@@ -1399,15 +1414,53 @@ fn stem_kind(stem: &str) -> Option<inf_material::ground::GroundKind> {
 /// The engine carries alpha in the base colour's own channel, so an opacity map
 /// would have to be composited into the albedo to mean anything; until it is,
 /// the honest answer is to say so and not pay for the decode.
-fn role_to_kind(role: &str) -> Option<MapKind> {
-    Some(match role {
-        "albedo" => MapKind::Albedo,
-        "normal" => MapKind::Normal,
-        "roughness" => MapKind::Roughness,
-        "metallic" => MapKind::Metallic,
-        "ao" => MapKind::Occlusion,
-        _ => return None,
-    })
+///
+/// # A packed UE mask, unpacked into the slots this engine has (wave CHAR1a.2)
+///
+/// Some roles are not one map: `msr` is Unreal's `T_*_MSR_MSK`, which carries
+/// **metallic in R, specular in G and roughness in B** — the name is the spec and
+/// a channel census of `T_Manny_01_MSR_MSK` confirms it (R bimodal 0/255 = a
+/// metal mask; G flat at 92–118 = the 0.5 specular constant; B 0/116/255 = the
+/// roughness). This engine's ORM is occlusion/roughness/metallic, so it is a
+/// SWIZZLE and not a rename, which is exactly what CHAR1a carried as item 76.
+///
+/// `aniso_ao_paint` is `T_*_AS?AO?MASK_MSK`: anisotropy in R, **ambient
+/// occlusion in G**, a paint mask in B. The importer used to take plane R,
+/// whose mean over the mannequin is **3.5 of 255** — so every character imported
+/// through this bridge had its ambient term multiplied by 0.014. That is not a
+/// subtle wrong: it is the body reading almost unlit in shade.
+///
+/// `Some(channel)` means "broadcast that channel of the decoded RGBA into a grey
+/// plane"; `pack_orm` reads channel 0 of whatever it is handed, so the broadcast
+/// is what makes one source texture fill two different ORM channels.
+///
+/// Returns an EMPTY slice for a role this engine has nowhere to put, which the
+/// caller reports as unplaced — `tangent`, `normal_second`, `decal` and
+/// `clearcoat` are all real maps with no home here, and saying so is the ASSET0
+/// audit's rule.
+fn role_to_planes(role: &str) -> &'static [(MapKind, Option<usize>)] {
+    match role {
+        "albedo" => &[(MapKind::Albedo, None)],
+        "normal" => &[(MapKind::Normal, None)],
+        "roughness" => &[(MapKind::Roughness, None)],
+        "metallic" => &[(MapKind::Metallic, None)],
+        "ao" => &[(MapKind::Occlusion, None)],
+        "msr" => &[(MapKind::Metallic, Some(0)), (MapKind::Roughness, Some(2))],
+        "aniso_ao_paint" => &[(MapKind::Occlusion, Some(1))],
+        _ => &[],
+    }
+}
+
+/// One channel of an RGBA plane, broadcast into a fresh grey RGBA plane.
+fn broadcast_channel(rgba: &[u8], channel: usize) -> Vec<u8> {
+    let mut out = vec![255u8; rgba.len()];
+    for (i, px) in rgba.chunks_exact(4).enumerate() {
+        let v = px[channel];
+        out[i * 4] = v;
+        out[i * 4 + 1] = v;
+        out[i * 4 + 2] = v;
+    }
+    out
 }
 
 /// A readable asset name out of a manifest key.

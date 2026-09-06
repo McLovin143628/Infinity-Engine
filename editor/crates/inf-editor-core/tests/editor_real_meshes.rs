@@ -362,6 +362,6 @@ fn an_unbound_skeletal_mesh_still_has_a_placeholder_path() {
     let mut store = EditorRenderAssets::new();
     store.set_content_root(Some(root.path().to_path_buf()));
     assert!(store
-        .resolve_skinned(&SkeletalMesh::default(), None, None)
+        .resolve_skinned(&SkeletalMesh::default(), None, None, None)
         .is_none());
 }

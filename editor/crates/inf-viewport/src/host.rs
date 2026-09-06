@@ -2392,7 +2392,17 @@ impl EngineHost {
                     live_render_assets.extend(sm.mesh);
                     live_render_assets.extend(sm.skeleton);
                     let player = w.get::<inf_ecs::components::AnimPlayer>(entity).copied();
+                    // **The machine, for the preview idle** (wave CHAR1a.2). Read the same
+                    // way the player is, and handed to the same door: with no sim pose and no
+                    // `AnimPlayer`, a character that carries a state machine is drawn in that
+                    // machine's ENTRY state at t = 0 instead of its bind pose. Outside Play
+                    // that is every authored character in the level, which is why the viewport
+                    // used to be full of T-poses.
+                    let machine = w
+                        .get::<inf_ecs::components::AnimStateMachine>(entity)
+                        .copied();
                     live_render_assets.extend(player.and_then(|p| p.clip));
+                    live_render_assets.extend(machine.and_then(|m| m.sm));
                     // P24.1: the pose the SIM evaluated for this entity this fixed
                     // step, if its `AnimStateMachine` published one. Read here rather
                     // than derived here — the machine's pose is deterministic sim
@@ -2405,7 +2415,12 @@ impl EngineHost {
                     // carries the same virtual-texture set the real geometry would —
                     // a character whose skeleton has not resolved is still a surface
                     // bound to a material (P26.4).
-                    let (color, metallic, roughness, emissive, vt) = w
+                    // **`blend` and `cutoff` ride here too since wave CHAR1a.2**, from
+                    // the same `Material` and through the same `blend_code` door as the
+                    // rigid path's: a hair card, an eyelash sheet or a cut-out garment
+                    // is a skinned surface, and until this line the skinned path had no
+                    // way to carry "this fragment is a hole".
+                    let (color, metallic, roughness, emissive, blend, cutoff, vt) = w
                         .get::<Material>(entity)
                         .map(|m| {
                             (
@@ -2413,6 +2428,8 @@ impl EngineHost {
                                 m.metallic,
                                 m.roughness,
                                 m.emissive_linear(),
+                                blend_code(m.blend),
+                                m.alpha_cutoff,
                                 inf_render::vt_set_for(vt, m.asset.map(|a| a.as_u128())),
                             )
                         })
@@ -2421,6 +2438,8 @@ impl EngineHost {
                             0.0,
                             0.5,
                             [0.0; 3],
+                            0,
+                            0.5,
                             inf_render::VtTextureSet::NONE,
                         ));
 
@@ -2441,12 +2460,15 @@ impl EngineHost {
                     // per-agent call would have produced for it, derived once per
                     // `(mesh, skeleton)` instead of once per agent per frame.
                     let resolved = match agent {
-                        Some(a) if !a.tier.poses() => {
-                            self.render_assets.resolve_skinned_shared(&sm)
-                        }
-                        _ => self
+                        Some(a) if !a.tier.poses() => self
                             .render_assets
-                            .resolve_skinned(&sm, player.as_ref(), posed),
+                            .resolve_skinned_shared(&sm, machine.as_ref()),
+                        _ => self.render_assets.resolve_skinned(
+                            &sm,
+                            player.as_ref(),
+                            posed,
+                            machine.as_ref(),
+                        ),
                     };
                     match resolved {
                         Some(draw) => {
@@ -2470,6 +2492,8 @@ impl EngineHost {
                                 emissive,
                                 id,
                                 mesh: slot,
+                                blend,
+                                cutoff,
                                 palette: draw.palette,
                                 shadow,
                             });
@@ -2489,9 +2513,13 @@ impl EngineHost {
                             id,
                             // Skeletal placeholder is always a cube (no primitive kind).
                             mesh: PrimMesh::Cube,
-                            // R-P5: skeletal placeholders are opaque.
-                            blend: 0,
-                            cutoff: 0.5,
+                            // Wave CHAR1a.2: the placeholder wears the SAME blend the
+                            // resolved character would. A masked surface whose skeleton
+                            // has not loaded is still a masked surface; the hard-coded
+                            // `0`/`0.5` was only ever right because the skinned path
+                            // could not be masked at all.
+                            blend,
+                            cutoff,
                         }),
                     }
                     self.id_to_guid.insert(id, guid);
@@ -8238,6 +8266,13 @@ fn project_cloth(
         emissive: [0.0; 3],
         id: inf_render::ID_NONE,
         mesh: slot,
+        // OPAQUE, stated rather than defaulted (wave CHAR1a.2): a simulated
+        // garment's surface is its own tint constant, not a material asset, so
+        // there is no authored blend to read here. A CUT-OUT garment needs the
+        // material identity the skinned path still does not carry — named in the
+        // wave ledger, not implied by a zero.
+        blend: 0,
+        cutoff: 0.5,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
     });
@@ -8284,6 +8319,13 @@ fn project_hair(
         emissive: [0.0; 3],
         id: inf_render::ID_NONE,
         mesh: slot,
+        // OPAQUE, stated rather than defaulted (wave CHAR1a.2): a simulated
+        // garment's surface is its own tint constant, not a material asset, so
+        // there is no authored blend to read here. A CUT-OUT garment needs the
+        // material identity the skinned path still does not carry — named in the
+        // wave ledger, not implied by a zero.
+        blend: 0,
+        cutoff: 0.5,
         palette: inf_render::identity_palette(),
         shadow: inf_render::SkinnedShadow::BindSphere,
     });

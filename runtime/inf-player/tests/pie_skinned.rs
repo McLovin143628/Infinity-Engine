@@ -269,7 +269,7 @@ fn the_pie_registry_resolves_real_skinned_geometry() {
         skeleton: Some(SKEL),
     };
     let draw = store
-        .resolve_skinned(&sm, None, None)
+        .resolve_skinned(&sm, None, None, None)
         .expect("the PIE payload's character resolves to real skinned geometry");
     assert_eq!(draw.mesh.vertices.len(), 3, "the bind-space stream is real");
     assert_eq!(draw.mesh.indices, vec![0, 1, 2]);
@@ -281,7 +281,7 @@ fn the_pie_registry_resolves_real_skinned_geometry() {
     // The negative control — the store a windowed PIE session used to be handed.
     assert!(
         SkinnedRegistry::new()
-            .resolve_skinned(&sm, None, None)
+            .resolve_skinned(&sm, None, None, None)
             .is_none(),
         "the inert store must still miss, or this test proves nothing about the \
          one that was threaded in"
@@ -303,7 +303,10 @@ fn the_payload_built_sim_poses_the_character_it_ships() {
         mesh: Some(MESH),
         skeleton: Some(SKEL),
     };
-    let rest = store.resolve_skinned(&sm, None, None).unwrap().palette;
+    let rest = store
+        .resolve_skinned(&sm, None, None, None)
+        .unwrap()
+        .palette;
 
     sim.step_once(inf_player::runtime_sim::RuntimeInput::default());
     let posed = inf_ecs::pose::evaluated_pose(sim.world(), HERO).expect(
@@ -311,7 +314,7 @@ fn the_payload_built_sim_poses_the_character_it_ships() {
                  skeleton or the machine's clips never crossed the wire",
     );
     let drawn = store
-        .resolve_skinned(&sm, None, Some(posed))
+        .resolve_skinned(&sm, None, Some(posed), None)
         .unwrap()
         .palette;
     assert_ne!(

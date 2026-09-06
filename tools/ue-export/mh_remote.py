@@ -103,16 +103,24 @@ def ensure_config(uproject):
 
 
 def launch(uproject, log):
-    """Start the editor with a window, detached, logging where we can read it."""
-    argv = [EDITOR, uproject, "-stdout", "-FullStdOutLogOutput", "-nosplash",
-            "-nop4", "-abslog=" + os.path.abspath(log)]
+    """Start the editor with a window, logging where we can read it.
+
+    **NOT detached, and that is a measured requirement, not a style.** The first
+    attempt at this door used `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` with
+    stdout on the null device — the tidy way to start a long-lived GUI child. The
+    editor booted to `LogShaderCompilers: Current jobs: 206, Batch size: 9` and
+    then **stopped**: 58 s of CPU in 21 minutes, 0.14 s of CPU in an 8 s sample,
+    no file I/O, zero `ShaderCompileWorker` processes alive and **no top-level
+    window at all** (`EnumWindows` over the pid returned nothing). Relaunched with
+    ordinary inherited handles it spawned **twelve** workers inside 20 seconds and
+    reached its window. A detached editor cannot start its own compile workers, and
+    the failure is silent — it looks exactly like the commandlet hang wave CHAR1a
+    recorded, which is why it is written down here rather than remembered.
+    """
+    argv = [EDITOR, uproject, "-nosplash", "-nop4",
+            "-abslog=" + os.path.abspath(log)]
     say("LAUNCH", " ".join(argv))
-    flags = 0
-    if hasattr(subprocess, "DETACHED_PROCESS"):
-        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    return subprocess.Popen(argv, creationflags=flags,
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+    return subprocess.Popen(argv)
 
 
 def connect(timeout_s):
@@ -151,10 +159,19 @@ def run_script(rx, mod, script):
 
 
 def stage_script(stage, out, work, male, female):
-    """The literal script the editor executes: set the environment
-    `metahuman.py` reads, then execute that very file. One source of truth --
-    the stage bodies live in `metahuman.py` and this file never copies them."""
-    mh = os.path.join(HERE, "metahuman.py").replace("\\", "/")
+    """The literal script the editor executes: set the environment the tool
+    reads, then execute that very file. One source of truth — the stage bodies
+    live in `metahuman.py` (and in `export.py` for the glTF crossing) and this
+    file never copies them.
+
+    The `export-gltf` stage runs **`export.py`**, not `metahuman.py`: once a
+    MetaHuman is assembled its meshes are ordinary `USkeletalMesh` assets, and
+    the bridge that already exports skeletal meshes, their LOD ladders, their
+    materials and their textures is the one that should export these. Nothing
+    about the crossing is MetaHuman-specific, which is the point.
+    """
+    tool = "export.py" if stage == "export-gltf" else "metahuman.py"
+    mh = os.path.join(HERE, tool).replace("\\", "/")
     return "\n".join([
         "import os",
         "os.environ['INF_UE_OUT'] = r'''%s'''" % out,
@@ -162,6 +179,14 @@ def stage_script(stage, out, work, male, female):
         "os.environ['INF_MH_WORK'] = '%s'" % work,
         "os.environ['INF_MH_MALE'] = '%s'" % male,
         "os.environ['INF_MH_FEMALE'] = '%s'" % female,
+        "os.environ['INF_UE_MODE'] = 'export'",
+        "os.environ['INF_UE_PACKS'] = 'MetaHumans'",
+        # `metahuman.py` reads `__file__` (its licence guard walks up from its own
+        # directory). A remote `ExecuteFile` of a literal has no `__file__` at
+        # all — the first live run died on `NameError: name '__file__' is not
+        # defined` — so it is bound here, to the path the source actually came
+        # from, rather than the guard being weakened to cope.
+        "__file__ = r'''%s'''" % mh,
         "_src = open(r'''%s''', encoding='utf-8').read()" % mh,
         "exec(compile(_src, r'''%s''', 'exec'))" % mh,
     ])

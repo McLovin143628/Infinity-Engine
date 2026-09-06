@@ -87,11 +87,16 @@ fn vs(in: VsIn) -> VsOut {
     out.normal = nrm * skinned_normal;
     out.color = in.color;
     out.id = in.misc.x;
-    // `pbr.zw` are the rigid path's alpha cutoff and blend code, and `pbr.z` is
-    // this path's joint count — so it is dropped HERE rather than left for a
-    // fragment stage to read as a cutoff the day someone gives this pipeline an
-    // alpha test. `emissive.w` (the atlas offset) is dropped by `.rgb` already.
-    out.pbr = vec4<f32>(in.pbr.xy, 0.0, 0.0);
+    // **The day someone gives this pipeline an alpha test is wave CHAR1a.2.**
+    // `pbr.z` is this path's joint count (the vertex stage's business and no
+    // further), and `pbr.w` carries the blend code and the cutoff together —
+    // `blend * 4 + cutoff` — because this pipeline is at the vertex-attribute
+    // wall and that channel was the last one still zero. Unpacked HERE, into the
+    // rigid path's own `pbr.zw` order (z = cutoff, w = code), so the fragment
+    // stage below tests a masked surface with the identical two lines mesh.wgsl
+    // uses. `emissive.w` (the atlas offset) is dropped by `.rgb` already.
+    let blend_code = floor(in.pbr.w * 0.25);
+    out.pbr = vec4<f32>(in.pbr.xy, in.pbr.w - blend_code * 4.0, blend_code);
     out.emissive = in.emissive.rgb;
     // The uv is a property of the SURFACE, not of the pose, so it rides through
     // unchanged — which is the whole difference between an authored
@@ -186,6 +191,15 @@ fn point_attenuation(dist: f32, range: f32) -> f32 {
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    // Masked alpha-test, wave CHAR1a.2 — the same two lines as mesh.wgsl:147,
+    // reading the code and the threshold the vertex stage unpacked out of
+    // `pbr.w`. Opaque (code 0) and translucent (code 2) never take this branch,
+    // so every pre-CHAR1a.2 skinned golden stays byte-identical (the branch is
+    // present and always false for them). Runs before the unlit short-circuit so
+    // hair cards and eyelashes show their holes in every view mode.
+    if (in.pbr.w > 0.5 && in.pbr.w < 1.5 && in.color.a < in.pbr.z) {
+        discard;
+    }
     // P26.5 RESIDENCY HEAT-MAP (`ViewMode::VtResidency`): every virtual-textured
     // surface painted by how far behind the streamer is at that pixel.
     //

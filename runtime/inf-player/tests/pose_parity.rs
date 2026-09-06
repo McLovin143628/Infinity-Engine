@@ -380,7 +380,7 @@ fn the_drawn_palette_follows_the_machine() {
         skeleton: Some(SKEL),
     };
     let rest = store
-        .resolve_skinned(&sm, None, None)
+        .resolve_skinned(&sm, None, None, None)
         .expect("a bound character draws")
         .palette;
 
@@ -474,7 +474,7 @@ fn palette(
     let posed = inf_ecs::pose::evaluated_pose(sim.world(), HERO);
     assert!(posed.is_some(), "the sim published no pose to draw");
     store
-        .resolve_skinned(sm, None, posed)
+        .resolve_skinned(sm, None, posed, None)
         .expect("a bound character draws")
         .palette
 }

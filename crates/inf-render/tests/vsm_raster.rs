@@ -936,6 +936,8 @@ fn a_skinned_caster_casts_through_its_own_palette() {
             ..Default::default()
         };
         s.skinned.push(inf_render::SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             translation: glam::DVec3::new(0.0, CUBE_XY.1 as f64, 0.0),
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::ONE,
@@ -1488,6 +1490,8 @@ fn a_skinned_casters_cull_sphere_contains_a_pose_that_left_the_bind_pose() {
         ..Default::default()
     };
     s.skinned.push(inf_render::SkinnedInstance {
+        blend: 0,
+        cutoff: 0.5,
         translation: glam::DVec3::new(0.0, CUBE_XY.1 as f64, 0.0),
         rotation: glam::Quat::IDENTITY,
         scale: glam::Vec3::ONE,
@@ -2200,6 +2204,8 @@ fn the_group_ceiling_counts_the_groups_it_refuses() {
     };
     for i in 0..want {
         s.skinned.push(inf_render::SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             translation: glam::DVec3::new((i % 32) as f64 * 0.2 - 3.2, (i / 32) as f64 * 0.2, 0.0),
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::ONE,
@@ -2294,6 +2300,8 @@ fn a_crowd_past_the_shadow_lod_casts_nothing_and_dirties_fewer_pages() {
         };
         for i in 0..CROWD {
             s.skinned.push(inf_render::SkinnedInstance {
+                blend: 0,
+                cutoff: 0.5,
                 translation: glam::DVec3::new(
                     (i % 16) as f64 * 0.4 - 3.2,
                     (i / 16) as f64 * 0.4,
@@ -2435,6 +2443,8 @@ fn a_crowd_of_proxies_is_one_group_and_refuses_nothing() {
     };
     for i in 0..want {
         s.skinned.push(inf_render::SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             translation: glam::DVec3::new((i % 32) as f64 * 0.2 - 3.2, (i / 32) as f64 * 0.2, 0.0),
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::ONE,
@@ -2525,6 +2535,8 @@ fn the_posed_bound_is_tighter_than_the_margin_and_still_contains_the_pose() {
             ..Default::default()
         };
         s.skinned.push(inf_render::SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             translation: glam::DVec3::new(0.0, CUBE_XY.1 as f64, 0.0),
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::ONE,
@@ -3590,6 +3602,8 @@ fn an_animating_character_invalidates_its_pages_and_a_still_one_does_not() {
             ..Default::default()
         };
         s.skinned.push(inf_render::SkinnedInstance {
+            blend: 0,
+            cutoff: 0.5,
             translation: glam::DVec3::new(-1.4, 1.1, 0.0),
             rotation: glam::Quat::IDENTITY,
             scale: glam::Vec3::splat(0.3),
@@ -3707,6 +3721,8 @@ fn the_skinned_caster_cache_holds_the_arc_its_pointer_key_names() {
         ..Default::default()
     };
     s.skinned.push(inf_render::SkinnedInstance {
+        blend: 0,
+        cutoff: 0.5,
         translation: glam::DVec3::new(-1.4, 1.1, 0.0),
         rotation: glam::Quat::IDENTITY,
         scale: glam::Vec3::splat(0.3),

@@ -1577,6 +1577,33 @@ pub struct SkinnedInstance {
     pub id: u32,
     /// Index into [`RenderScene::skinned_meshes`].
     pub mesh: usize,
+    /// Blend mode (wave CHAR1a.2): `0` opaque, `1` masked (alpha-test), `2`
+    /// translucent. **The same codes and the same meaning as
+    /// [`MeshInstance::blend`]**, projected from the same `Material::blend` at
+    /// the same seams — because a hair card, an eyelash sheet and a garment are
+    /// skinned surfaces, and until this field existed the skinned path had no way
+    /// to say "this fragment is a hole".
+    ///
+    /// Defaults to `0` at every construction site that predates it, so every
+    /// committed skinned golden runs the identical arithmetic: the discard below
+    /// is present-and-false for an opaque body.
+    ///
+    /// **`2` draws opaque, and that is stated rather than hidden.** The rigid
+    /// path buckets translucent instances into their own draw range
+    /// ([`crate::passes::mesh::pack_bucketed`]); the skinned pipeline has one
+    /// blend state and one range per mesh, so a translucent skinned surface is a
+    /// pipeline this pass does not have yet. Masked is the case the characters
+    /// need and the case this wave built.
+    pub blend: u8,
+    /// Alpha-test threshold used when `blend == 1`: fragments whose base-colour
+    /// alpha is below this are discarded. Defaults to `0.5`, exactly like
+    /// [`MeshInstance::cutoff`].
+    ///
+    /// Packed with [`blend`](Self::blend) into the ONE free channel of the shared
+    /// instance stream (`pbr.w`) — see
+    /// [`crate::passes::skinned`]'s `instance_raw`, which explains why there is
+    /// only one.
+    pub cutoff: f32,
     /// The skinning palette: one matrix per skeleton joint, indexed by the
     /// vertex `joints`. Uploaded into the pass's **palette atlas** at an offset
     /// this instance carries in a packed channel.

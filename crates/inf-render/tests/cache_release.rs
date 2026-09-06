@@ -362,6 +362,8 @@ fn gi_holds_only_the_content_the_scene_still_names() {
     let mut scene = vgeom_scene(&mesh, true);
     scene.skinned_meshes.push(skinned_mesh());
     scene.skinned.push(SkinnedInstance {
+        blend: 0,
+        cutoff: 0.5,
         vt: Default::default(),
         translation: DVec3::ZERO,
         rotation: Quat::IDENTITY,
@@ -391,6 +393,8 @@ fn gi_holds_only_the_content_the_scene_still_names() {
     swapped.vgeom_instances[0].asset = ASSET ^ 0xFF;
     swapped.skinned_meshes.push(skinned_mesh());
     swapped.skinned.push(SkinnedInstance {
+        blend: 0,
+        cutoff: 0.5,
         vt: Default::default(),
         translation: DVec3::ZERO,
         rotation: Quat::IDENTITY,
@@ -441,6 +445,8 @@ fn gi_releases_its_caches_when_the_setting_goes_off() {
     let mut scene = vgeom_scene(&mesh, true);
     scene.skinned_meshes.push(skinned_mesh());
     scene.skinned.push(SkinnedInstance {
+        blend: 0,
+        cutoff: 0.5,
         vt: Default::default(),
         translation: DVec3::ZERO,
         rotation: Quat::IDENTITY,

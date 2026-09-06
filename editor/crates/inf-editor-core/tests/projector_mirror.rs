@@ -1505,7 +1505,7 @@ fn the_skinned_instance_projection_matches_field_for_field() {
 #[test]
 fn both_projectors_draw_skeletal_meshes_the_same_way() {
     // Fragments that must appear in BOTH projectors, verbatim.
-    const SHARED: [&str; 16] = [
+    const SHARED: [&str; 18] = [
         // The branch is the `MeshRef`-absent arm: an entity is a rigid draw or a
         // skinned one, never both.
         "w.get::<MeshRef>(entity).is_none()",
@@ -1525,7 +1525,13 @@ fn both_projectors_draw_skeletal_meshes_the_same_way() {
         // and no pixel comparison in this repo would.
         "w.get::<inf_ecs::components::AnimPlayer>(entity).copied()",
         "inf_ecs::pose::evaluated_pose(world, guid)",
-        "resolve_skinned(&sm, player.as_ref(), posed)",
+        "resolve_skinned(&sm, player.as_ref(), posed, machine.as_ref())",
+        // **The preview idle reaches BOTH hosts** (wave CHAR1a.2). A host
+        // that stopped reading the machine would draw every unplayed
+        // character in its bind pose while the other drew an idle — the
+        // exact editor-versus-shipping split this file exists to stop, and
+        // the one CHAR1a photographed from the editor side.
+        "w.get::<inf_ecs::components::AnimStateMachine>(entity).copied()",
         // **The tier reaches the renderer** (wave NPC1b). Four fragments, because
         // four separate things follow from `CrowdAgent` and each of them is a
         // divergence if one host drops it: an agent off the pose path resolves the
@@ -1546,6 +1552,7 @@ fn both_projectors_draw_skeletal_meshes_the_same_way() {
         "w.get::<inf_ecs::crowd::CrowdAgent>(entity).copied()",
         "agent.map(|a| inf_ecs::crowd::agent_look_in(world, a.guid))",
         "Some(a) if !a.tier.poses() =>",
+        "resolve_skinned_shared(&sm, machine.as_ref())",
         "let shadow = crowd_shadow(agent);",
         // ONE `skinned_meshes` slot per (mesh, skeleton) pair…
         "skinned_slots.entry(draw.key).or_insert_with(",

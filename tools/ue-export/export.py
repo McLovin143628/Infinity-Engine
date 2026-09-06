@@ -227,6 +227,35 @@ CHARACTERS = [
         ],
     },
     {
+        # **THE ASSEMBLED METAHUMANS** (wave CHAR1a.2). Not a fixed asset list
+        # like the mannequins': the assembly writes its meshes under
+        # `<work>/Built/<Name>/{Body,Face}/SKM_*`, so this pack names a PREFIX
+        # and takes whatever the pipeline produced. It is empty in the user's own
+        # project and non-empty in the scratch `MHForge` one, which is exactly
+        # where `metahuman.py` builds them — the same script, run in whichever
+        # project has the assets.
+        #
+        # LICENCE: MetaHuman Content licence, mid-2025 terms. `ship` is TRUE and
+        # that is the difference from the mannequins: Epic's 2025-06 change
+        # licenses MetaHuman content for use in ANY engine below US$1M annual
+        # revenue, so these may be cooked into a shipped `.ipack`. They still may
+        # never be COMMITTED — use is not redistribution of the source assets.
+        "name": "MetaHumans",
+        "license": "MetaHuman Content licence, mid-2025 terms -- usable in ANY "
+                   "engine (Epic's 2025-06 licence change; free below US$1M "
+                   "annual revenue). Shipped inside a cooked .ipack; NEVER "
+                   "committed to the engine repository, because use is not "
+                   "redistribution. Terms relied on: "
+                   "unrealengine.com/en-US/eula/metahuman, retrieved 2026-09-05.",
+        "ship": True,
+        "skeletal": [],
+        "skeletal_prefix": [
+            {"prefix": "/Game/INF/Built", "match": r"^SKM_.*_(Body|Face)Mesh$",
+             "limit": 8},
+        ],
+        "clips": [],
+    },
+    {
         "name": "ALS_Community",
         "license": "MIT License, Copyright (c) 2020 Doga Can Yanikoglu & "
                    "LongmireLocomotion (ALS-Community-UE5/LICENSE). Permits use "
@@ -275,6 +304,50 @@ PARAM_KIND = {
     # Wave CHAR1a: the UE5 mannequin material names its albedo slot
     # "Base Texture", which none of the keys above reach.
     "base texture": "albedo", "basetex": "albedo", "base": "albedo",
+
+    # ── M_Mannequin, READ (wave CHAR1a.2) ───────────────────────────────────
+    #
+    # The mannequin binds EIGHT textures and this bridge was placing four of
+    # them wrongly, because the substring fallback below is a net with holes in
+    # it. Probed in UE on 2026-09-05 (`MaterialEditingLibrary
+    # .get_texture_parameter_names` + the bound texture's compression/sRGB), and
+    # the channel meanings confirmed by a census of the exported PNGs:
+    #
+    # | parameter | texture | what it is | what it USED to classify as |
+    # |---|---|---|---|
+    # | `Normal` | `T_*_N` | the tangent-space normal (TC_NORMALMAP) | normal (right) |
+    # | `BNormal` | `T_*_BN` | a SECOND normal | **normal** — three maps raced for one slot |
+    # | `Tangent` | `T_*_Tan` | the anisotropy tangent field, not a normal at all | **normal** — same race |
+    # | `Base Texture` | `T_*_D` | albedo, sRGB | albedo (fixed at CHAR1a) |
+    # | `LogoTexture` | `T_UE_Logo_M` | a grayscale logo decal | **metallic**, from the `_m$` name rule |
+    # | `MSR_tex` | `T_*_MSR_MSK` | metallic / specular / roughness, packed | unknown (CHAR1a carried 76) |
+    # | `AnisoAOPaintMaskTex` | `T_*_AS?AO?MASK_MSK` | anisotropy / AO / paint mask | `ao` — but from the WRONG channel |
+    # | `CCCCRTex` | `T_*_CCRCCPlastic_MSK` | clearcoat + clearcoat roughness | unknown |
+    #
+    # The channel census (16-bit-free 8-bit PNGs, every 17th texel of
+    # `T_Manny_01_*`, 4096²) is what settles the packing rather than the name:
+    #
+    # * `MSR_MSK` R is BIMODAL (p25 0, median 247, max 255) — a metal mask;
+    #   G sits at 92-118 — UE's 0.5 specular constant; B is 0/116/255 — the
+    #   roughness. R = metallic, G = specular, B = roughness, exactly as the
+    #   name spells it.
+    # * `ASAOPMASK_MSK` R has **mean 3.5 of 255** (anisotropy, ~0 everywhere),
+    #   G has mean 244 with creases darker (the AO), B is bimodal 0/255 (the
+    #   paint mask). The importer read plane R, so the hero's occlusion was
+    #   **0.014** and its ambient term was multiplied away — the single biggest
+    #   reason the body read dark and streaky in CHAR1a's frames.
+    # * `T_Manny_01_N` is nearly FLAT (R,G in 122..130 of 255) and
+    #   `T_Manny_01_BN` carries the real relief (R,G over the full 0..255). The
+    #   engine has ONE normal slot and it goes to the parameter the material
+    #   calls `Normal`; `BNormal` is reported as unplaced rather than silently
+    #   winning a race, which is what it was doing.
+    "normal": "normal",
+    "bnormal": "normal_second",
+    "tangent": "tangent",
+    "logotexture": "decal",
+    "msrtex": "msr",
+    "anisoaopaintmasktex": "aniso_ao_paint",
+    "ccccrtex": "clearcoat",
 }
 
 NAME_KIND = [
@@ -299,6 +372,13 @@ NAME_KIND = [
 
 
 def kind_of_texture(tex, param_name):
+    """The ROLE a texture plays, from its parameter first and its name last.
+
+    **The exact match must be tried against every key before any substring is**
+    (wave CHAR1a.2). `BNormal` contains `normal`, so the loop below classified
+    the mannequin's second normal as its first one and two maps raced for a slot
+    that holds one. Exactness is not a shortcut here, it is the rule.
+    """
     p = (param_name or "").strip().lower().replace("_", "").replace(" ", "")
     if p in PARAM_KIND:
         return PARAM_KIND[p]
@@ -959,6 +1039,39 @@ def run_characters():
             except Exception as e:
                 ERRORS.append("%s: %s" % (path, e))
                 traceback.print_exc()
+        # **Discovered skeletal meshes** (wave CHAR1a.2), for a pack whose assets
+        # are WRITTEN by a pipeline rather than shipped under known names -- the
+        # assembled MetaHumans. Sorted then truncated, exactly as the surface
+        # packs' selectors are and for the same reason: an asset registry's order
+        # is a function of a scan and this manifest has to be the same manifest
+        # twice.
+        for sel in pack.get("skeletal_prefix", []):
+            pat = sel.get("match")
+            limit = sel.get("limit", 8)
+            try:
+                REG.scan_paths_synchronous([sel["prefix"]], force_rescan=True)
+            except Exception as e:
+                ERRORS.append("scan %s: %s" % (sel["prefix"], e))
+            hits = []
+            for a in REG.get_assets_by_path(sel["prefix"], recursive=True):
+                if str(a.asset_class_path.asset_name) != "SkeletalMesh":
+                    continue
+                name = str(a.asset_name)
+                if pat and not re.search(pat, name):
+                    continue
+                hits.append((name, str(a.package_name)))
+            hits.sort()
+            hits = hits[:limit]
+            packs[-1]["selectors"].append({
+                "prefix": sel["prefix"], "match": pat, "limit": limit,
+                "chosen": [h[1] for h in hits],
+            })
+            for name, pkg in hits:
+                try:
+                    add_skeletal_mesh("%s.%s" % (pkg, name), pack["name"])
+                except Exception as e:
+                    ERRORS.append("%s: %s" % (pkg, e))
+                    traceback.print_exc()
         for sel in pack.get("clips", []):
             limit = sel.get("limit", 64)
             pat = sel.get("match")
