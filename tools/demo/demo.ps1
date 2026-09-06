@@ -1,4 +1,4 @@
-# THE DEMO LOOP (wave FIX1) — build the editor, boot it on the showcase island,
+﻿# THE DEMO LOOP (wave FIX1) — build the editor, boot it on the showcase island,
 # press its own Play button, drive the game, and photograph the result.
 #
 # A wave that ends in a green battery has proved the tests agree with the code.
