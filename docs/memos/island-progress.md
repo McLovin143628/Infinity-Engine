@@ -35526,3 +35526,118 @@ measurement written beside it.
      underwear.** The assembly's grooms are strand data this bridge does not
      cross; the garments are `MI_WI_DefaultGarment_*` slots on the face/body
      meshes, which the combined mesh does not carry.
+
+## Wave CHAR1a.3 — the AUDIT (2026-09-06)
+
+Base = the wave's `7751ee0d`. Sixteen commits over `origin/main` when it closed.
+
+### 1. The face was not a face, and the frame that said so was misread
+
+`CHAR1a3-FINAL/01c-editor-both-4x.png` — the wave's own frame at its own 4× — shows
+both MetaHumans with **blank, featureless heads**: no eyes, no nose, no mouth, no
+ears. The report reads it as "both MetaHumans fully textured … real faces".
+
+The cause needed no picture. UE's `CreateCombinedFaceAndBodyMesh` welds the face
+onto the body and keeps **both halves' texture atlases**, packed as UDIM, and then
+hands the result ONE material slot because a UE material has one atlas:
+
+| | tile 1001 (`u ∈ [0,1)`) | tile 1002 (`u ∈ [1,2)`) |
+|---|---|---|
+| triangles, LOD 0 | **34 514** — the face half's own count | **60 816** |
+| y-span | 1.3962 … 1.7798 m | −0.0016 … 1.4792 m |
+| triangles straddling | **0** | **0** |
+
+The slot was bound to `MI_Body_Baked`, whose albedo — decoded and looked at — is a
+body atlas of torso, hands, feet and underwear with **no face on it**;
+`vt_sample.wgsl` wraps (`uv - floor(uv)`), so the head sampled the torso. The face
+atlas was on disk the whole time. `FMetaHumanGeometryExportParams` offers no option
+that changes this: head, body, full-body, overwrite, and nothing else.
+
+**The fix rides the sections the wave built.** `metahuman.py` gains a `slots` stage
+(`combine_one` without `export_geometry`, so it runs in a commandlet) that declares
+the combined mesh's material slots in **UDIM tile order**, each bound to the donor
+slot whose atlas that tile is — UE's own slot names being the only place the head
+material is identified reliably, because the glTF crossing writes a mesh's materials
+deduplicated and its primitive indices do not survive a `LODMaterialMap` (measured:
+the FACE mesh's 23 860-triangle head primitive comes out referencing
+`MI_Teeth_Baked`). `MeshAsset::split_uv_tiles` — Ring 0, beside `skinned_sections` —
+then measures the tiles off the geometry, re-sections the mesh one submesh per tile
+and rebases each section's uv into `[0,1)`, refusing on a triangle that straddles.
+
+After, per identity: **34 514 / 60 816** at LOD 0, **5 844 / 15 196** at LOD 1,
+**1 364 / 6 632** at LOD 2, with different albedos on the two sections. The portrait
+(`AUDIT-CHAR1a3-FINAL/01d-portrait.png`, `09-portrait-face-4x.png`) is the hero's
+face at **one metre**: brows, eyelids, a nose, lips, ears, a beard shadow.
+
+### 2. Two more binding walks, found by the fix
+
+* **`pie::build_scene_payload` was the THIRD walk.** The wave closed the
+  slot-material hole in the editor's `vt_level_key` and the pack's
+  `material_content`; the payload builder — which decides what bytes Play is handed
+  at all — still collected only `Material.asset`. With the body sectioned, the
+  editor drew two people in skin and **PIE drew them black with specular hot
+  spots**, photographed on one run. Eight lines, and an arm that builds a
+  two-section character through the real builder and asserts all three materials
+  arrive.
+* **The LOD rungs are sectioned differently from LOD 0.** UE writes LOD 0 as one
+  primitive spanning both tiles and LOD 1 as TWO — a 20 244-triangle primitive that
+  also spans both plus a 796-triangle mouth bag inside tile 1001. The first cut of
+  the split only touched single-primitive meshes, so the rungs stayed bound
+  slot-for-slot against sections that are not tiles: a whole body in the head's
+  atlas past the crowd's 32 m switch. The rule now fires on **a submesh that spans
+  more than one tile** and re-sections the whole mesh. The rung census moves
+  20 244 → **21 040** and 7 736 → **7 996**, because a two-slot export no longer
+  drops UE's second section.
+
+### 3. Corrections to the wave's numbers
+
+| the wave said | measured |
+|---|---|
+| the face half has 12 material slots | the MANIFEST lists 12 UE keys (`M_Hide` twice); the imported payload has **11** |
+| rungs 95 330 / 20 244 / 7 736 | the last two were a SECTION short — see above |
+| 164 clips, "zero under ten animated joints" | true of the MANIFEST; the FILES read **71 × 125, 161 × 38, 1 × 1** — `ALS_Community_Bow_Draw` animates ONE joint on disk |
+| "441 of 441 imported sidecars" carry a licence | 416 of 582 under `Content/UE`; **166 city assets carry none**, and 12 `.inf_vmesh` in the MetaHumans folder are unstamped because they are derived after the sweep |
+| item 92's cause was the audit's `.inf_sm` fix | falsified: that fix was in BOTH binaries of the run whose before/after pair is unchanged (fix 01:43:24, player built 01:45:17, editor 01:48:11). The symptom is gone; the cause is in the content the wave replaced and is no longer recoverable |
+| "one demo run at HEAD `7751ee0d`" | the binaries were built from `c4211b50`, three commits earlier |
+| `bind_slots` bound "12 of 12" | it zipped UE's slot ORDER against the glTF's: `MI_Face_Skin_Baked_LOD1` was bound to `M_Hide`. Binds BY NAME now |
+
+`--rebind-character` also left the LOD ladder behind (`import = None` at the
+committed GUID), so the island's hero draws its 95 330-triangle LOD 0 at every
+distance — carried for PERF1 with the number.
+
+### 4. What the UE side offers OUTFIT1, against carried 106
+
+Carried 106 says the grooms are strand data and the garments are slots on the
+face/body meshes. Both are wrong, measured under
+`ue-staging/MHForge/Content/INF/Built/INF_<Name>/`:
+
+* **Clothing is an ordinary SkeletalMesh** — `INF_Dominic_Outfits.uasset` (4.9 MB),
+  `INF_Vivian_Outfits.uasset` — carrying the `MI_WI_DefaultGarment_*` slots. One
+  more `skeletal_prefix` selector and it crosses the bridge unchanged.
+* **Hair is already CARDS.** Every groom ships `<Groom>_CardsMesh_Group0_LOD0…LOD4`
+  beside the `GroomAsset` and its `_Binding`, plus `_Helmet_LOD5…LOD7`; eyebrows,
+  eyelashes, beard and moustache each carry their own `MI_WI_*_Hair` materials.
+  Cards are meshes. The strand `GroomAsset` is the part that does not cross.
+
+  What the ENGINE needs is not a texture: it draws ONE `SkeletalMesh` per entity, so
+  a garment is a child entity sharing the wearer's skeleton GUID and palette.
+
+### 5. Carried out of the audit (continuing from 106)
+
+109. The mesh/material importer is **not identity-idempotent** — item 94's fix
+     covered clips. A re-import whose glTF differs by a material NAME writes `_3`,
+     `_4`, `_5`: measured, 18 `.inf_mesh` → 36 and 224 sidecars → 362 in one run.
+110. **Derived assets are not licence-stamped** — the sweep runs by destination
+     folder at the end of an import and a `.inf_vmesh` written later is not reached;
+     the arm counts the stamped and never asserts the complement is empty.
+111. **`--rebind-character` drops the LOD ladder** (see above).
+112. **`scene_player_pawn` is a function of the document, not of the level** — it
+     answered with a newly placed second body on one run in four.
+113. **The eyes, teeth and lashes inside the face tile wear the head-skin
+     material** — their atlases are on the FACE mesh's twelve slots, which the
+     combined mesh does not carry. FACE1's.
+114. **The `.py` continuation sweep is refused with a measurement**, superseding
+     item 108's shape: the same rule over `tools/`'s four `.py` files finds four
+     hits and all four are deliberate alignment (a docstring's env-var table, an
+     indented banner). A ban at 0:4 signal needs an allowlist, which is the
+     ban-list hazard at a worse ratio than the one it would replace.

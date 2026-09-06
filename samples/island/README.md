@@ -144,10 +144,22 @@ table.
 > **And the licence is now on the ASSETS, not only here** (wave CHAR1a.3,
 > carried item 96). Every asset `inf-import` writes carries `licence`,
 > `licence_may_ship` and `licence_pack` in its sidecar, from the pack it actually
-> came from — measured on the island project: **441 of 441**, ALS 126 (may ship),
-> MetaHumans 215 (may ship), the mannequins 78 (**LOCAL ONLY**), and 22 that a
-> two-pack run cannot attribute, recorded at the conservative position. A licence
-> that lives only in a README is a licence nobody finds next to the bytes.
+> came from — measured on the island project: ALS 126 (may ship), MetaHumans 190
+> (may ship), the mannequins 78 (**LOCAL ONLY**), and 22 that a two-pack run
+> cannot attribute, recorded at the conservative position: **416 stamped**. A
+> licence that lives only in a README is a licence nobody finds next to the bytes.
+>
+> **Two holes in that sentence, measured by the CHAR1a.3 audit and written down
+> rather than rounded off.** It is true of what a RUN writes and not of what is on
+> disk: **166 sidecars under `Content/UE` carry no licence at all** — the
+> Megascans and Downtown-West city assets an earlier wave imported, before the
+> stamp existed — and **12 `.inf_vmesh` sidecars inside the MetaHumans folder are
+> unstamped**, because the sweep runs by destination folder at the end of an
+> import and a derived meshlet DAG written afterwards is not reached. Neither is a
+> licence risk (the city assets' position is the paragraph above; a derived DAG of
+> a MetaHuman mesh sits among 190 stamped siblings), and both are carried as items
+> 110 and the ledger's own row so that the next reader does not have to
+> re-discover that "441 of 441" was counting the stamped.
 
 **The order matters and there is only one that works:**
 
