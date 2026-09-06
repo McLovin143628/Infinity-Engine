@@ -2129,7 +2129,12 @@ fn golden_skinned_masked() {
         rotation: Quat::IDENTITY,
         scale: Vec3::ONE,
         // The odd cards are BELOW the cutoff, so they are the holes.
-        color: [0.80, 0.62, 0.40, if i % 2 == 0 { 0.9 } else { 0.2 }],
+        color: [
+            0.80,
+            0.62,
+            0.40,
+            if i.is_multiple_of(2) { 0.9 } else { 0.2 },
+        ],
         metallic: 0.0,
         roughness: 0.55,
         emissive: [0.0; 3],

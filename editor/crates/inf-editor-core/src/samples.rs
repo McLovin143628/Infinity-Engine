@@ -10832,7 +10832,7 @@ fn write_character_folder(
     let (files, _advisories) = built;
     // Anything the generator no longer writes goes, so a renamed asset does not
     // leave its predecessor behind for the sidecar scan to promote.
-    for entry in std::fs::read_dir(&dir).map_err(|e| format!("read samples dir: {e}"))? {
+    for entry in std::fs::read_dir(dir).map_err(|e| format!("read samples dir: {e}"))? {
         let entry = entry.map_err(|e| format!("read samples dir: {e}"))?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name == "README.md" || files.iter().any(|(n, _)| *n == name) {
