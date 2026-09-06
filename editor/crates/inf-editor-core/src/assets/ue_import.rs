@@ -122,6 +122,19 @@ pub struct UeImportOptions {
     /// indices address one rig cannot be posed by another: the LOD-0 mesh, the
     /// skeleton it was skinned to, and the material in its first slot.
     pub rebind_character: Option<String>,
+    /// The manifest key of a SECOND skeletal mesh to write at the **female**
+    /// starter character's committed GUIDs (wave CHAR1a.3).
+    ///
+    /// # Why a second target rather than a second run
+    ///
+    /// The island's crowd wears whatever `(mesh, skeleton, machine)` triples the
+    /// LEVEL's own entities carry (`inf_ecs::society::level_archetypes`), and the
+    /// second committed body — `samples/starter-character-f`, whose GUIDs are
+    /// `0x5C10_00B0 + n` — is the one the demo loop places to give the crowd a
+    /// plural wardrobe. Rebinding it in the same run as the hero's is what makes
+    /// the two MetaHumans a MALE and a FEMALE default rather than one body
+    /// twice: two keys, two identities, one import.
+    pub rebind_character_f: Option<String>,
 }
 
 impl Default for UeImportOptions {
@@ -140,6 +153,7 @@ impl Default for UeImportOptions {
             character_lods: 3,
             retarget_to: None,
             rebind_character: None,
+            rebind_character_f: None,
         }
     }
 }
@@ -688,7 +702,30 @@ pub fn import_manifest(
                 .map(|s| s.skeleton.len())
                 .unwrap_or(0);
             if opts.rebind_character.as_deref() == Some(sk.key.as_str()) {
-                rebind_character(project, lod0, skel_id, sk, &mat_ids, &mut report)?;
+                rebind_character(
+                    project,
+                    lod0,
+                    skel_id,
+                    sk,
+                    &mat_ids,
+                    &crate::samples::starter_character_ids(),
+                    ("Starter", "Starter_Body", "Starter_Skin"),
+                    ("Starter_Idle", "Starter_Walk", "Starter_Run"),
+                    &mut report,
+                )?;
+            }
+            if opts.rebind_character_f.as_deref() == Some(sk.key.as_str()) {
+                rebind_character(
+                    project,
+                    lod0,
+                    skel_id,
+                    sk,
+                    &mat_ids,
+                    &crate::samples::starter_character_f_ids(),
+                    ("Starter_F", "Starter_F_Body", "Starter_F_Skin"),
+                    ("Starter_F_Idle", "Starter_F_Walk", "Starter_F_Run"),
+                    &mut report,
+                )?;
             }
             report
                 .skeletal
@@ -826,7 +863,26 @@ pub fn import_manifest(
     // pack as the body, so they were authored on exactly the rig that is now
     // underneath it.
     if opts.rebind_character.is_some() && !report.clips.is_empty() {
-        rebind_character_clips(project, &m.clips, &report.clips.clone(), &mut report)?;
+        rebind_character_clips(
+            project,
+            &m.clips,
+            &report.clips.clone(),
+            &crate::samples::starter_character_ids(),
+            ("Starter_Idle", "Starter_Walk", "Starter_Run"),
+            false,
+            &mut report,
+        )?;
+    }
+    if opts.rebind_character_f.is_some() && !report.clips.is_empty() {
+        rebind_character_clips(
+            project,
+            &m.clips,
+            &report.clips.clone(),
+            &crate::samples::starter_character_f_ids(),
+            ("Starter_F_Idle", "Starter_F_Walk", "Starter_F_Run"),
+            true,
+            &mut report,
+        )?;
     }
 
     // ── 3. fixtures ──────────────────────────────────────────────────────────
@@ -1208,9 +1264,16 @@ fn rebind_character(
     skeleton: Option<AssetId>,
     sk: &SkeletalMesh,
     mat_ids: &BTreeMap<String, AssetId>,
+    // **Which committed character this body becomes** (wave CHAR1a.3) — the
+    // male starter's identity set or the female's. The stems ride with it,
+    // because a rebind writes at a committed GUID *and* at that GUID's committed
+    // FILE NAME, so the asset scan finds one asset rather than two claiming one
+    // id.
+    ids: &crate::character::CharacterIds,
+    stems: (&str, &str, &str),
+    clip_stems: (&str, &str, &str),
     report: &mut UeImportReport,
 ) -> Result<()> {
-    let ids = crate::samples::starter_character_ids();
     let (Some(want_mesh), Some(want_skel), Some(want_mat)) = (ids.mesh, ids.skeleton, ids.material)
     else {
         return Ok(());
@@ -1225,15 +1288,25 @@ fn rebind_character(
     let skel: inf_anim::SkeletonAsset = project.load_payload(skeleton)?;
     let body: inf_mesh::MeshAsset = project.load_payload(mesh)?;
     let root = project.root().to_path_buf();
+    // **The rig this identity WORE**, read before it is replaced — see
+    // `retarget_committed_clips`. `None` on a first rebind into a project that
+    // has never had this character, which is also the case where there is
+    // nothing to re-retarget.
+    let previous: Option<inf_anim::Skeleton> = project
+        .load_payload::<inf_anim::SkeletonAsset>(want_skel)
+        .ok()
+        .map(|a| a.skeleton);
 
-    let skel_path = root.join("Starter.inf_skel");
+    let skel_path = root.join(format!("{}.inf_skel", stems.0));
     project.write_asset_at_with_id(&skel_path, &skel, want_skel, vec![], None)?;
-    let mesh_path = root.join("Starter_Body.inf_mesh");
+    let mesh_path = root.join(format!("{}.inf_mesh", stems.1));
     project.write_asset_at_with_id(&mesh_path, &body, want_mesh, vec![want_skel], None)?;
-    report.rebinds.push(("Starter.inf_skel".into(), want_skel));
     report
         .rebinds
-        .push(("Starter_Body.inf_mesh".into(), want_mesh));
+        .push((format!("{}.inf_skel", stems.0), want_skel));
+    report
+        .rebinds
+        .push((format!("{}.inf_mesh", stems.1), want_mesh));
 
     // The skin. The first material slot, because that is the one the body's
     // torso uses on both mannequins (measured: `M_torso` on Manny, `Quinn_01`
@@ -1247,11 +1320,11 @@ fn rebind_character(
     {
         let payload: MaterialAsset = project.load_payload(*mat)?;
         let deps = payload.texture_dependencies();
-        let path = root.join("Starter_Skin.inf_mat");
+        let path = root.join(format!("{}.inf_mat", stems.2));
         project.write_asset_at_with_id(&path, &payload, want_mat, deps, None)?;
         report
             .rebinds
-            .push(("Starter_Skin.inf_mat".into(), want_mat));
+            .push((format!("{}.inf_mat", stems.2), want_mat));
     } else {
         report.advisories.push(format!(
             "{}: rebound the body and its rig, but slot 0 named no imported \
@@ -1266,7 +1339,135 @@ fn rebind_character(
         body.triangle_count(),
         skel.skeleton.len()
     ));
+    // **AND THE CLIPS COME WITH IT** — see `retarget_committed_clips`.
+    retarget_committed_clips(
+        project,
+        ids,
+        clip_stems,
+        previous.as_ref(),
+        &skel.skeleton,
+        report,
+    );
     Ok(())
+}
+
+/// **Re-retarget the clips a rebound identity already owns onto its NEW rig**
+/// (wave CHAR1a.3).
+///
+/// # Why a rebind is not finished without it
+///
+/// A clip's coupling to a rig is POSITIONAL: `QuatTrack::joint` is a `u16` index
+/// into `Pose::locals`, index-aligned to `Skeleton::joints`. So writing a
+/// different skeleton at a character's committed GUID re-points every track in
+/// its clips at a different bone — in range, so nothing refuses, and the
+/// character animates with an arm where a spine should be. Wave CHAR1a found
+/// exactly that picture ("one arm over its head and its legs splayed") when it
+/// rebound a body without its clips, and fixed it by taking the clips from the
+/// same PACK as the body.
+///
+/// That fix does not reach a pack with no clips of its own, which is what the
+/// MetaHumans are: the assembly writes skeletal meshes and no `AnimSequence` at
+/// all. Their hero would take a 342-joint rig and keep three clips indexed
+/// against a 161-joint one.
+///
+/// So the clips are re-retargeted BY NAME, from the rig the identity wore to the
+/// rig it now wears — `RetargetMap::shared_names` plus `CHAIN_INFILL`, the same
+/// door every other clip in this bridge crosses. A joint the new rig has and the
+/// old one did not (a MetaHuman body publishes the mannequin's 161 names among
+/// its 342: twist chains, correctives, the face's neck) is simply untouched and
+/// plays at its bind, which is the honest answer for a bone no source clip ever
+/// moved.
+///
+/// A no-op when the rig did not change, and when there was no previous rig at
+/// all.
+fn retarget_committed_clips(
+    project: &mut AssetProject,
+    ids: &crate::character::CharacterIds,
+    stems: (&str, &str, &str),
+    previous: Option<&inf_anim::Skeleton>,
+    target: &inf_anim::Skeleton,
+    report: &mut UeImportReport,
+) {
+    let Some(previous) = previous else { return };
+    if previous.len() == target.len()
+        && previous
+            .joints()
+            .iter()
+            .zip(target.joints())
+            .all(|(a, b)| a.name == b.name)
+    {
+        return;
+    }
+    // The body the clips are settled against: the mesh that was just written at
+    // this identity's own GUID, read back off disk so the reader goes where the
+    // runtime goes.
+    let ground: Option<Vec<inf_anim::retarget::GroundVertex>> = ids
+        .mesh
+        .and_then(|id| project.load_payload::<inf_mesh::MeshAsset>(id).ok())
+        .map(|m| {
+            m.submeshes
+                .iter()
+                .filter(|s| s.is_skinned())
+                .flat_map(|s| {
+                    s.vertices
+                        .iter()
+                        .zip(s.skin.iter())
+                        .map(|(v, k)| (v.position, k.joints, k.weights))
+                })
+                .collect()
+        });
+    let map = inf_anim::retarget::RetargetMap::shared_names(previous, target);
+    let slots = [
+        (format!("{}.inf_anim", stems.0), ids.idle),
+        (format!("{}.inf_anim", stems.1), ids.walk),
+        (format!("{}.inf_anim", stems.2), ids.run),
+    ];
+    for (file, want) in slots {
+        let Some(want) = want else { continue };
+        let Ok(mut payload) = project.load_payload::<inf_anim::AnimClipAsset>(want) else {
+            continue;
+        };
+        let (clip, rep) =
+            inf_anim::retarget::retarget_clip(&payload.clip, previous, target, &map, true);
+        if rep.is_vacuous() {
+            report.advisories.push(format!(
+                "{file}: retarget onto the rebound rig produced NO tracks ({} source \
+                 joints, none named on the {} of the new rig) — the clip is left as \
+                 it was and will animate the wrong bones",
+                previous.len(),
+                target.len()
+            ));
+            continue;
+        }
+        payload.clip = clip;
+        payload.skeleton = ids.skeleton.map(|s| *s.uuid().as_bytes());
+        if let (Some(mesh), Some(_)) = (ground.as_ref(), ids.mesh) {
+            let d = inf_anim::retarget::settle_to_ground_with_skin(&mut payload.clip, target, mesh);
+            if d.abs() >= 0.001 {
+                report.advisories.push(format!(
+                    "{file}: settled {:.1} mm onto the rebound body's ground plane",
+                    d * 1000.0
+                ));
+            }
+        }
+        let path = project.root().join(&file);
+        let deps: Vec<AssetId> = ids.skeleton.into_iter().collect();
+        let import = super::skeleton_binding::import_table(project, ids.skeleton);
+        match project.write_asset_at_with_id(&path, &payload, want, deps, import) {
+            Ok(_) => report.advisories.push(format!(
+                "{file}: re-retargeted onto the rebound rig — {} of {} tracks kept, \
+                 {} dropped ({} → {} joints)",
+                rep.tracks_out,
+                rep.tracks_in,
+                rep.dropped.len(),
+                previous.len(),
+                target.len()
+            )),
+            Err(e) => report
+                .advisories
+                .push(format!("{file}: re-retarget not written ({e})")),
+        }
+    }
 }
 
 /// **The three clips the hero's state machine names, from the rebound body's own
@@ -1293,9 +1494,16 @@ fn rebind_character_clips(
     project: &mut AssetProject,
     manifest: &[Clip],
     imported: &[(String, AssetId, usize)],
+    ids: &crate::character::CharacterIds,
+    stems: (&str, &str, &str),
+    // **Which mannequin's clips this identity prefers** (wave CHAR1a.3). The
+    // table below names two candidates per slot and `find` takes the FIRST the
+    // manifest carries, which is sorted by object path -- so Manny sorts before
+    // Quinn and BOTH identities took `MM_Idle`. A male default and a female
+    // default that walk identically are one default twice.
+    prefer_female: bool,
     report: &mut UeImportReport,
 ) -> Result<()> {
-    let ids = crate::samples::starter_character_ids();
     // The body and the rig the hero was just rebound to, for the ground settle
     // below. Read back off disk rather than threaded through from
     // `rebind_character`: they were written at fixed GUIDs a moment ago, and a
@@ -1320,10 +1528,17 @@ fn rebind_character_clips(
                 })
                 .collect()
         });
+    let order = |m: &'static str, f: &'static str| -> [&'static str; 2] {
+        if prefer_female {
+            [f, m]
+        } else {
+            [m, f]
+        }
+    };
     let slots: [(&str, Option<AssetId>, [&str; 2]); 3] = [
-        ("Starter_Idle", ids.idle, ["MM_Idle", "MF_Idle"]),
-        ("Starter_Walk", ids.walk, ["MM_Walk_Fwd", "MF_Walk_Fwd"]),
-        ("Starter_Run", ids.run, ["MM_Run_Fwd", "MF_Run_Fwd"]),
+        (stems.0, ids.idle, order("MM_Idle", "MF_Idle")),
+        (stems.1, ids.walk, order("MM_Walk_Fwd", "MF_Walk_Fwd")),
+        (stems.2, ids.run, order("MM_Run_Fwd", "MF_Run_Fwd")),
     ];
     let by_key: BTreeMap<&str, AssetId> = imported
         .iter()
@@ -1331,9 +1546,11 @@ fn rebind_character_clips(
         .collect();
     for (stem, want, names) in slots {
         let Some(want) = want else { continue };
-        let found = manifest
+        // The PREFERENCE is honoured before the manifest's order: the first
+        // name that exists wins, not the first record that matches either name.
+        let found = names
             .iter()
-            .find(|c| names.contains(&c.name.as_str()))
+            .find_map(|want| manifest.iter().find(|c| c.name == *want))
             .and_then(|c| by_key.get(c.key.as_str()).copied());
         let Some(found) = found else {
             report.advisories.push(format!(
