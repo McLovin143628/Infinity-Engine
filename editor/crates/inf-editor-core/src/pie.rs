@@ -1277,6 +1277,24 @@ where
             bound.extend(terrain.layer_materials());
         }
     }
+    // **AND A SKINNED MESH'S MATERIAL SLOTS** (wave CHAR1a.3 audit). A slot is
+    // named by the `.inf_mesh`, not by any component, so a body drawn in SECTIONS
+    // binds exactly one material here — the instance's own — and every other
+    // section names a material whose derived record and textures are absent from
+    // the payload. Measured, and photographed: the island's two MetaHumans drew
+    // correctly in the editor viewport (whose `vt_level_key` walk collects the
+    // same slots since this wave) and BLACK in PIE.
+    //
+    // The bytes are already in hand: `meshes` above carried every
+    // `SkeletalMesh.mesh` through `resolve_mesh` for the skinned pass, so this is
+    // a decode of what is being shipped rather than a second walk of the project.
+    // Empty for every mesh written before the slot table existed.
+    for (_, bytes) in &meshes {
+        let Ok(mesh) = inf_asset::decode::<inf_mesh::MeshAsset>(bytes) else {
+            continue;
+        };
+        bound.extend(mesh.material_slot_assets.iter().flatten().map(|a| a.uuid()));
+    }
     for asset in bound {
         if !seen_material.insert(asset) {
             continue;

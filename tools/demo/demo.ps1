@@ -38,7 +38,11 @@ param(
     [int]$EditorSettleS = 90,
     # Place the second committed body beside the pawn before the editor frame,
     # in the DOCUMENT only. See tools/demo/place.mjs for why it is not saved.
-    [bool]$PlaceFemale = $true
+    [bool]$PlaceFemale = $true,
+    # Photograph the hero's FACE at ~1.7 m before Play. See tools/demo/portrait.mjs:
+    # the loop's own camera is behind the character and a head is 30 px of a 1080p
+    # frame, which is not evidence about a face.
+    [bool]$Portrait = $true
 )
 
 $ErrorActionPreference = "Continue"
@@ -182,6 +186,29 @@ if ($PlaceFemale -and (Get-Command node -ErrorAction SilentlyContinue)) {
 }
 & powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "01b-editor-settled.png") -WindowTitle "Infini" -Foreground |
     ForEach-Object { Say $_ }
+
+# ── 2b. THE PORTRAIT ─────────────────────────────────────────
+#
+# A wave that puts a face on the island has to photograph a face. The loop's own
+# camera sits behind the character, so the head is thirty pixels of a 1080p frame
+# — which is how wave CHAR1a.3 shipped two BLANK heads and called them "real
+# faces". `portrait.mjs` turns the hero to the camera, puts a marker at his head
+# and presses the editor's own Focus, all in the open document; the frame after
+# it is a portrait. See tools/demo/portrait.mjs.
+if ($Portrait -and (Get-Command node -ErrorAction SilentlyContinue)) {
+    Say "framing the hero's face (document only; never saved)"
+    & node (Join-Path $PSScriptRoot "portrait.mjs") $Port 2>&1 | ForEach-Object { Say "  cdp: $_" }
+    if ($LASTEXITCODE -ne 0) { Say "  portrait.mjs exit $LASTEXITCODE" }
+    Start-Sleep -Seconds 3
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $shot -Out (Join-Path $OutDir "01d-portrait.png") -WindowTitle "Infini" -Foreground |
+        ForEach-Object { Say $_ }
+    # …and back, so the frames after this one are the level's own pose. ONE
+    # undo: the portrait is one transaction, the hero's own translation.
+    if (Get-Command node -ErrorAction SilentlyContinue) {
+        & node (Join-Path $PSScriptRoot "undo.mjs") $Port 1 2>&1 | ForEach-Object { Say "  cdp: $_" }
+    }
+    Start-Sleep -Seconds 2
+}
 
 # ── 3. press Play ────────────────────────────────────────────────────────────
 $pressed = $false

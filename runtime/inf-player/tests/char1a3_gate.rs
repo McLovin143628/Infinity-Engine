@@ -1100,6 +1100,138 @@ fn the_islands_hero_draws_its_head_from_its_own_atlas() {
     }
 }
 
+/// **THE PIE PAYLOAD CARRIES A SKINNED MESH'S SLOT MATERIALS** (wave CHAR1a.3
+/// audit — PIE == shipping).
+///
+/// There are THREE walks that decide which materials a host resolves, not two:
+/// the editor's `EditorRenderAssets::vt_level_key`, the cooked pack's
+/// `PackLevelSource::material_content`, and `pie::build_scene_payload`, which
+/// chooses the bytes a Play session is handed. CHAR1a.3 taught the first two
+/// about a mesh's slot table and left the third looking only at
+/// `Material.asset`.
+///
+/// Measured, and photographed: with the island's MetaHumans split into a face
+/// section and a body section, the editor viewport drew them in skin and PIE
+/// drew them BLACK with specular hot spots, because the section materials'
+/// derived records and textures were simply not in the payload.
+///
+/// **The mutation**: delete the `for (_, bytes) in &meshes` loop in `pie.rs`.
+/// The payload carries one material instead of three and this arm names the two
+/// that went missing. Verified.
+#[test]
+fn the_pie_payload_carries_a_skinned_meshs_slot_materials() {
+    use inf_editor_core::scene::SceneDoc;
+
+    let mesh_id = uuid::Uuid::from_u128(0x5EC7_0001);
+    let skin_id = uuid::Uuid::from_u128(0x5EC7_0002);
+    let face_id = uuid::Uuid::from_u128(0x5EC7_0003);
+    let body_id = uuid::Uuid::from_u128(0x5EC7_0004);
+
+    // A two-section mesh: one triangle per section, one slot each.
+    let tri = |slot: u32| inf_mesh::SubMesh {
+        name: format!("s{slot}"),
+        vertices: vec![inf_mesh::MeshVertex::default(); 3],
+        indices: vec![0, 1, 2],
+        material_slot: Some(slot),
+        skin: vec![inf_mesh::VertexSkin::default(); 3],
+    };
+    let mut mesh =
+        inf_mesh::MeshAsset::new(vec![tri(0), tri(1)], vec!["face".into(), "body".into()]);
+    mesh.bind_material_slots([
+        (0, inf_asset::AssetId(face_id)),
+        (1, inf_asset::AssetId(body_id)),
+    ]);
+    let mesh_bytes = inf_asset::encode(&mesh).expect("the mesh encodes");
+    let mat = |base: [f32; 4]| {
+        inf_asset::encode(&inf_material::MaterialAsset {
+            schema_version: inf_material::MaterialAsset::CURRENT_VERSION,
+            base_color: base,
+            metallic: 0.0,
+            roughness: 0.5,
+            emissive: [0.0; 3],
+            base_color_texture: None,
+            normal_texture: None,
+            metallic_roughness_texture: None,
+            blend: Default::default(),
+            alpha_cutoff: 0.5,
+            detail_texture: None,
+            detail_scale_m: 1.0,
+            uv_tiling_m: 1.0,
+            wet_roughness_floor: 0.0,
+        })
+        .expect("the material encodes")
+    };
+    let skin_bytes = mat([1.0, 1.0, 1.0, 1.0]);
+    let face_bytes = mat([0.9, 0.7, 0.6, 1.0]);
+    let body_bytes = mat([0.7, 0.5, 0.4, 1.0]);
+
+    let mut doc = SceneDoc::new();
+    doc.edit_create_character(
+        "Hero",
+        // (skeleton, MESH, machine) — the door's own order.
+        uuid::Uuid::from_u128(0x5EC7_0005),
+        mesh_id,
+        uuid::Uuid::from_u128(0x5EC7_0006),
+        Some(inf_editor_core::scene::doc::CharacterSkin {
+            asset: skin_id,
+            base_color: [1.0, 1.0, 1.0, 1.0],
+            metallic: 0.0,
+            roughness: 0.5,
+        }),
+        glam::DVec3::ZERO,
+        None,
+        1.8,
+    );
+
+    let payload = inf_editor_core::pie::build_scene_payload(
+        &doc,
+        |_| None,
+        |_| None,
+        |_| None,
+        |_| None,
+        |_| None,
+        |_| None,
+        |g| (g == mesh_id).then(|| mesh_bytes.clone()),
+        |g| {
+            if g == skin_id {
+                Some(skin_bytes.clone())
+            } else if g == face_id {
+                Some(face_bytes.clone())
+            } else if g == body_id {
+                Some(body_bytes.clone())
+            } else {
+                None
+            }
+        },
+        |_| None,
+        60,
+        false,
+    )
+    .expect("the payload builds");
+
+    let carried: std::collections::BTreeSet<uuid::Uuid> =
+        payload.materials.iter().map(|(g, _)| *g).collect();
+    let want = |g: uuid::Uuid| inf_asset::derived_material_id(inf_asset::AssetId(g)).uuid();
+    println!(
+        "payload materials: {} ({:?})",
+        carried.len(),
+        carried.iter().take(4).collect::<Vec<_>>()
+    );
+    assert!(
+        carried.contains(&want(skin_id)),
+        "the instance's own Material is not in the payload — this arm is not \
+         measuring what it thinks it is"
+    );
+    for (what, id) in [("face", face_id), ("body", body_id)] {
+        assert!(
+            carried.contains(&want(id)),
+            "the {what} SECTION's material is absent from the PIE payload — every \
+             surface it draws previews black while the cooked build, which packs \
+             the mesh's dependency closure, resolves it"
+        );
+    }
+}
+
 // ── the fixture's own doors, mirrored from `island_gate` ─────────────────────
 
 fn loose_sim(content: &Path, slug: &str) -> inf_player::runtime_sim::RuntimeSim {
