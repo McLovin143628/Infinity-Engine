@@ -1050,6 +1050,30 @@ fn rebind_character_clips(
     report: &mut UeImportReport,
 ) -> Result<()> {
     let ids = crate::samples::starter_character_ids();
+    // The body and the rig the hero was just rebound to, for the ground settle
+    // below. Read back off disk rather than threaded through from
+    // `rebind_character`: they were written at fixed GUIDs a moment ago, and a
+    // reader that goes to the same place the runtime will is a reader that
+    // cannot disagree with it.
+    let rig: Option<inf_anim::Skeleton> = ids
+        .skeleton
+        .and_then(|id| project.load_payload::<inf_anim::SkeletonAsset>(id).ok())
+        .map(|a| a.skeleton);
+    let ground: Option<Vec<inf_anim::retarget::GroundVertex>> = ids
+        .mesh
+        .and_then(|id| project.load_payload::<inf_mesh::MeshAsset>(id).ok())
+        .map(|m| {
+            m.submeshes
+                .iter()
+                .filter(|s| s.is_skinned())
+                .flat_map(|s| {
+                    s.vertices
+                        .iter()
+                        .zip(s.skin.iter())
+                        .map(|(v, k)| (v.position, k.joints, k.weights))
+                })
+                .collect()
+        });
     let slots: [(&str, Option<AssetId>, [&str; 2]); 3] = [
         ("Starter_Idle", ids.idle, ["MM_Idle", "MF_Idle"]),
         ("Starter_Walk", ids.walk, ["MM_Walk_Fwd", "MF_Walk_Fwd"]),
@@ -1074,7 +1098,24 @@ fn rebind_character_clips(
             ));
             continue;
         };
-        let payload: inf_anim::AnimClipAsset = project.load_payload(found)?;
+        let mut payload: inf_anim::AnimClipAsset = project.load_payload(found)?;
+        // **SETTLED AGAINST THIS BODY** (wave CHAR1a.2). `retarget_clip` already
+        // settled the clip against the target RIG, and that pins the lowest
+        // ball/foot joint — but a foot rotated at toe-off lifts its sole while
+        // its joint stays put, so the mannequin's run still dipped **17.8 mm**
+        // into the road after it. Here the rebound body is on disk, so the
+        // question can be asked of the mesh: the lowest skinned vertex over the
+        // cycle, the same arithmetic the shader runs. Measured after: the hero's
+        // idle plants within 1.6 mm and its run within 1.9 mm.
+        if let (Some(sk), Some(mesh)) = (rig.as_ref(), ground.as_ref()) {
+            let d = inf_anim::retarget::settle_to_ground_with_skin(&mut payload.clip, sk, mesh);
+            if d.abs() >= 0.001 {
+                report.advisories.push(format!(
+                    "{stem}: settled {:.1} mm onto the rebound body's ground plane",
+                    d * 1000.0
+                ));
+            }
+        }
         let deps: Vec<AssetId> = project
             .db()
             .get(found)
