@@ -35298,3 +35298,231 @@ sha256-identical to `origin/main`. rustdoc **409** (ceiling 450, unmoved). clipp
 `git diff --exit-code` clean. CRLF: **0** carriage returns in the committed blobs of
 all 82 changed text files. Scene **v27**, `ScenePayload` **v13**, `EXPECTED_LEVELS`
 **24**. `char1a_gate` **22 arms**. No new dependency. Nothing pushed.
+
+## Wave CHAR1a.3 — the MetaHuman on the hero (2026-09-06)
+
+The third slice of CHAR1a. The island's hero and one street NPC are the two
+MetaHumans wave CHAR1a.2 assembled; a skinned mesh can wear more than one
+material; and the six defects the CHAR1a audit carried out of the bodies wave
+(91–96) plus its catalogue correction (100) are closed at the door that produced
+each of them.
+
+### 1. The merge premise was wrong, and UE answered the question itself
+
+Carried item **81** said a MetaHuman needs an ENGINE-SIDE merge: a headless
+342-joint body (y ≤ 1.3343 m) and an 875-joint face (1.3962–1.7798 m) welded onto
+a ~1 185-joint union rig, with the face's joint indices re-indexed by name. The
+audit found the premise wrong on paper —
+`MetaHumanCharacterExportBlueprintLibrary::ExportGeometry` carries
+`bFullBodySkeletalMesh` and routes to `CreateCombinedFaceAndBodyMesh` — and the
+wave's recorded failure (`Assertion failed: CurrentApplication.IsValid()`) was
+measured in a COMMANDLET, which has no Slate application.
+
+**Retried through `mh_remote.py`'s live-editor door: it worked, first time, in
+19.4 s for both characters.** What came out is not the union rig either:
+
+| | body half | face half | **the combined mesh** |
+|---|---|---|---|
+| triangles (LOD 0) | 47 392 | 34 514 | **95 330** |
+| joints | 342 | 875 | **342** |
+| material slots | 1 | 12 | **1** |
+| y-span (m) | −0.0016 … 1.3343 | 1.3962 … 1.7798 | **−0.0016 … 1.7798** |
+| glTF primitives | 1 | 9 | **1** |
+| LOD ladder | 47 392 / 11 843 / 5 468 / 1 478 | 34 514 / 6 872 / 1 524 / 356 | **95 330 / 20 244 / 7 736 / 2 208** |
+
+The face is skinned into the BODY's rig and remeshed — 95 330 against the halves'
+81 906 — so there is no union skeleton, no re-indexing, no seam and no 6.2 cm gap:
+the span runs continuously from the body's own floor (−0.00163835881, to the last
+digit of the body half's) to the face's own crown (1.77984762, likewise). The
+engine-side merge is **not built and is not needed**; `inf-anim`'s
+`merge_skeletons` keeps its own callers.
+
+The combined mesh comes out wearing a clay material on its one slot, so
+`metahuman.py`'s new `combine` stage re-binds it **by slot name** from the
+assembled character's own `SKM_*_BodyMesh` / `SKM_*_FaceMesh`, in UE, before the
+glTF crossing — reported per slot as matched, already correct, or still clay.
+Measured: `body_shader_shader` ← `M_FullBody_Clay` becomes `MI_Body_Baked`,
+**by-name**, zero slots left clay, both characters.
+
+### 2. The MetaHuman materials, probed rather than guessed
+
+`probe_materials` dumps every texture parameter of every material the assembled
+and combined meshes wear, with its compression settings and sRGB flag — the same
+method CHAR1a.2 used on `M_Mannequin`, on the pipeline's own names:
+
+| parameter | texture | compression | role |
+|---|---|---|---|
+| `Basecolor Baked` | `T_Body_BC`, `T_Head_LOD*_BC` | TC_DEFAULT, sRGB | albedo |
+| `Normal Baked` | `T_*_N` | TC_NORMALMAP | normal |
+| `SRMF Baked` | `T_*_SRMF` | TC_MASKS | **specular / roughness / metallic / fuzz** |
+| `SRM Baked` | `T_Teeth_SRM` | TC_MASKS | the same three, no fourth |
+| `Scatter Baked` | `T_*_Scatter` | TC_DEFAULT | subsurface — **no slot here** |
+| `Micro Skin Details Mask` | `T_Skin_Microtiling_M` | TC_MASKS | a 32-px detail mask — no slot |
+| `Iris/Sclera Basecolor Baked` | `T_Eye*_BC` | TC_DEFAULT, sRGB | albedo |
+| `Iris/Sclera Normal Baked` | `T_Eye*_N` | TC_NORMALMAP | normal |
+| `Normal LOD Baked` | `T_BakedNormal_LOD*` | TC_NORMALMAP | a second normal — no slot |
+| `Basecolor/Normal Animated Delta cm*/wm*` | `T_Face_*_Animated_*` | TC_HDR_COMPRESSED / TC_DEFAULT | facial-rig deltas — no slot |
+
+**The channel census settles the packing** (every 17th texel of the exported
+PNGs, three maps agreeing):
+
+| texture | R | G | B | A |
+|---|---|---|---|---|
+| `T_Body_SRMF` (8192²) | med **150** — the specular constant | med **187** — the roughness (skin is rough) | **0 at every percentile, max included** — skin is not a metal | med 200 |
+| `T_Head_LOD1_SRMF` (4096²) | 153 | 176 | **0** | 203 |
+| `T_Teeth_SRM` (2048²) | 34 | 64 | **0** | 255 |
+| `T_Body_BC` (4096²) | 96 | 54 | 39 — a warm brown | 255 |
+| `T_Body_N` (8192²) | 127 | 127 | 255 | 255 |
+
+So `srmf` swizzles **G → roughness, B → metallic** — a DIFFERENT swizzle from
+`msr`'s (`R → metallic, B → roughness`), which is why both are in `role_to_planes`
+by name rather than under one "packed mask" rule that would have had to guess.
+The specular plane is dropped in silence rather than reported: unlike `tangent` or
+`clearcoat` it is a channel of a texture two thirds of which just landed, and an
+advisory saying "srmf is unplaced" about it would be false.
+
+### 3. A skinned mesh wears more than one material
+
+`SKM_Manny` ships **two** material slots and a MetaHuman face **twelve**, and the
+skinned path drew slot 0's material over all of them. The combined body needs
+one, so this is not what put the MetaHumans on the island — it is the capability
+the face, the mannequin and every future clothed character need, and it is built.
+
+* **`.inf_mesh` v3** appends `material_slot_assets`. The slot NAMES and
+  `SubMesh::material_slot` have been in the payload since P4; what nothing
+  carried was which ASSET a slot is. It could not live in the sidecar — neither a
+  cooked `.ipack` nor a PIE `ScenePayload` carries one, so the editor would have
+  drawn a face correctly and the shipped build in one colour. **A real rung**:
+  bincode is positional, so `#[serde(default)]` buys an appended field nothing;
+  there is a frozen `mesh_v2` record and a `decode_wire` branch, and a v2 payload
+  still decodes and comes back with an empty table, which is what it meant. Cost
+  on disk: **exactly one byte** per mesh (an empty `Vec` is one zero varint),
+  measured over the thirteen committed `.inf_mesh` (both starter folders went
+  311 808 → 311 809, preserving the six-byte difference between them).
+* **`MeshAsset::skinned_sections`** derives `(first index, index count, slot)`
+  over the same concatenated index buffer both `skinned_mesh_data` mirrors build,
+  coalescing adjacent submeshes that want one slot, and returns EMPTY for a mesh
+  that wants one — which is every committed character in this tree.
+* **`inf_render::skinned_sections`** is the ONE door both projectors turn a range
+  plus a material GUID into a `SkinnedSection` through: the rule is Ring 0's, the
+  material lookups are each host's (the editor derives a `DerivedMaterial` from a
+  loose `.inf_mat`, the player reads the cooked `.inf_matd` — the asymmetry
+  `material_content`'s own doc states).
+* **`SkinnedRun` gains a range**, and `None` — what an unsectioned instance
+  produces — emits the identical draw. **The two skinned goldens are
+  sha256-identical to `origin/main`**: `skinned_mesh`
+  `7454feab9e548dbecddc201b78f00328c164a548b87c4cc77c1475e8e83526a3`,
+  `crowd_variation`
+  `c74b857d2439a2297817ebb4b493443dbcbcf2849a8e184f2fb139eb30166221`, and the
+  whole 124-scene suite is green under `INF_GOLDEN_STRICT=1`.
+* **Both binding walks register a skinned mesh's slot materials**, together and in
+  one wave, because `VtTextures::want_floor` is a pure function of the
+  registration SEQUENCE and one host adding a material the other does not would
+  page different tiles in PIE and in the game. Empty for every mesh written
+  before this wave, so no level in this repository moves.
+* **The palette was never the problem** (clause 3, measured):
+  `SKINNED_PALETTE_MATRICES = 1 << 18` = 262 144 frame-wide, and the combined
+  body needs **342** — 0.13 %. The counted drop at `passes/skinned.rs` never
+  fires. **Tier policy**: the MetaHumans are what BOTH committed identities now
+  resolve to in the island project, so they are drawn at every tier that draws a
+  body; the ladder that decides cost is the geometry one (95 330 / 20 244 /
+  7 736 triangles at the crowd's own 32 / 96 / 512 m radii), not a per-tier body
+  swap. No code was written for clause 3 because the counted drop did not fire.
+
+### 4. The hero is Dominic and one street NPC is Vivian
+
+`--rebind-character-f` writes a second body at the FEMALE starter's committed
+GUIDs, so one import makes a male default and a female one rather than one
+default twice — and the clip table now honours a PREFERENCE, because it named
+`["MM_Idle", "MF_Idle"]` per slot and took the first record the manifest carried,
+and the manifest is sorted by object path, so Manny sorted before Quinn and both
+identities took `MM_Idle`.
+
+**And the clips follow the rig across a rebind.** A clip's coupling to a skeleton
+is POSITIONAL, so writing a different rig at a character's committed GUID
+re-points every track at a different bone — in range, with nothing to refuse it.
+CHAR1a fixed that for a pack that ships its own clips by taking them from the
+same pack as the body; the MetaHumans ship no `AnimSequence` at all.
+`retarget_committed_clips` re-retargets by NAME across the swap:
+
+| | measured |
+|---|---|
+| rig | 161 → **342** joints, both identities |
+| tracks kept | **150 of 161** |
+| mannequin names the MetaHuman rig does not publish | **11**: `weapon_l`, `weapon_r`, `ik_hand_root`, `ik_hand_gun`, `ik_hand_l`, `ik_hand_r`, `ik_foot_root`, `ik_foot_l`, `ik_foot_r`, `interaction`, `center_of_mass` |
+| …what they are | every one an IK or attachment helper. **Not one deforms the body.** |
+| `hand_l` off bind, hero | idle **0.2894 m**, walk **0.3733 m**, run **0.4860 m** |
+| re-settled onto the new body | idle −4.9 mm, walk −3.4 mm, run −19.2 mm (male); −1.3, −3.0, −21.1 mm (female) |
+
+### 5. The six carried defects
+
+| # | what it was | what closed it | measured |
+|---|---|---|---|
+| **91** | the editor drew a skinned surface untextured while PIE drew it textured | `vt_set_for` is a warm-gated SNAPSHOT, not a binding, and the editor's ONE projection is the one that installs the registry — in which nothing can be warm. `sync_vt_bindings` clears the projection latch after a level installs, asking for one more projection on the next frame. | editor hero chroma **8.4 → 41.2**; both bodies textured in `01c-editor-both-4x.png` |
+| **92** | street NPCs drew in the mannequin's bind A-pose | the audit's `.inf_sm`-in-the-payload fix was the cause; this wave measures both crowd doors and photographs the street | a `Full`/`Near` agent publishes a pose that moves `hand_l` **0.8565 m** from bind; the shared (`Far`) palette differs from the identity by **1.3940** at its worst joint and **0.4379** at `hand_l`; **all 1 000** island agents are `Far`, so every street NPC draws the shared entry-clip palette; `07b-street-npc-5x.png` shows two MetaHumans with their arms down and their fingers relaxed |
+| **93** | 124 of 164 clips were two-joint shells | `UGLTFAnimSequenceExporter` writes tracks for the bones of a **preview mesh**, not of the sequence's skeleton, and falls back to the FIRST registry mesh sharing the rig — a two-bone helper here. `export.py` chooses the richest compatible mesh, binds it through the editor-only `SetPreviewSkeletalMesh` UFUNCTION (`preview_skeletal_mesh` is a private `UPROPERTY`; `set_editor_property` refused it 164 times of 164), and restores it. | animated-joint census **2×124 / 89×34 / 161×4 / 79×1 / 24×1** → **79×125 / 161×38 / 24×1**, zero under ten. `ALS_CLF_Walk_F`: 6 423 B / 6 channels → **118 095 B / 237** |
+| **94** | 656 `.inf_anim` from four un-deduplicated runs | `clip_guid` — the identity is a pure function of the manifest key, the path a pure function of the name | the island's pack: **656 → 164**, and a second run leaves 164 |
+| **95** | `--rebind-character` left the clips' `skeleton_content_hash` stale | the rebind rebuilds the table against the rig on disk | all six rebound clips record their own rig's hash |
+| **96** | no asset on disk carried its licence | every asset a run writes carries `licence`, `licence_may_ship` and `licence_pack`, from the pack it came from — plus a destination sweep, because `ImportOutput::produced` comes back EMPTY on a re-import (the dedupe reuses what is there) and a stamp keyed on it reaches everything on the first run and nothing on the second | **441 of 441** imported sidecars, by pack: ALS 126 (may ship), MetaHumans 215 (may ship), mannequins 78 (LOCAL ONLY), 22 unattributed at the conservative position |
+| **100** | "no cover / vault / climb" | ALS ships ledge climbing as **mantle** — 13 assets including a `MantleComponent` | the census is DERIVED into the manifest now (`movement_sets`), so the next correction is a measurement |
+
+### 6. What the frames show
+
+`<scratchpad>/CHAR1a3-FINAL/`, one demo run at HEAD except `10-*`, which is this
+wave's own before-picture and is labelled as one.
+
+| frame | what it shows |
+|---|---|
+| `01b-editor-settled.png`, `01c-editor-both-4x.png` | the editor at `Streaming 52/52`: **both MetaHumans textured** — skin, faces, underwear. Carried 91 closed. |
+| `10-editor-before-vt-fix-4x.png` | the same crop from this wave's first run, before the island's level was rebuilt: the hero **flat white**, chroma 8.4 |
+| `04-pie-idle.png`, `04b-pie-idle-crop.png` | PIE, the hero at rest — a skin-toned MetaHuman with an anatomical back |
+| `05-pie-walk.png`, `05b-pie-walk-crop.png` | mid-stride |
+| `06-pie-run.png` | the run cycle; hero body p25 64.9, p50 84.0, chroma mean 25.3 |
+| `07-pie-street.png`, `07b-street-npc-5x.png` | the street at 4×: a female MetaHuman NPC and the male hero, **both with their arms down**. Carried 92's symptom, gone. |
+| `08-feet-5x.png` | the soles meeting the road with no gap and no sinking |
+| `09-face-4x.png` | the hero's head at 8× |
+
+**And a defect the frames found.** The first run photographed a flat white hero
+in a fully-textured world, and the cause was not the renderer: the island
+project's `VancouverIsland.inf_lvl` was BUILT before the audit's `f8397f9a`, so
+its hero carried **`material: None`** — read off the level's own bytes. Rebuilding
+the project through `inf island build` and re-running the two imports put the
+binding in the level and the texture on the body. A wave that had only re-run the
+editor would have blamed the VT fix.
+
+**And a second one.** With the project's derived assets cold, 45 s of settle left
+the editor still populating when the demo pressed Play; the button never changed
+and the loop reported "NO PLAYER after 240 s". The identical run at 90 s reached
+Play in 6 s and the hero moved **17.496 m**. The default moved to 90 with the
+measurement written beside it.
+
+### 7. Carried out of CHAR1a.3 (continuing from 100)
+
+101. **A section's virtual textures resolve only for a slot material the level
+     already registers.** Both binding walks now collect a skinned mesh's slot
+     materials, so a mesh with a slot table registers them — but the CLAIM is
+     untested on real content, because the only asset in this project with more
+     than one slot is the MetaHuman FACE (12 slots), and the face is not what the
+     island wears. The two-section golden proves the pass and the projectors; a
+     twelve-section FACE on a body is FACE1's.
+102. **The `srmf` specular plane is dropped in silence.** This engine's PBR is
+     metallic-roughness and reads no specular map. It is stated here and in
+     `role_to_planes`; if a specular slot ever exists, the plane is already
+     crossing the bridge.
+103. **`Scatter`, `Micro Skin Details Mask` and the six facial-animation deltas
+     cross the bridge and land nowhere.** Subsurface is PAR5's, the detail mask
+     wants the engine's own detail slot (a whole texture with a tiling rate, not
+     a mask), and the deltas want the 875-joint face rig. Reported per material
+     by the importer.
+104. **The MetaHuman face rig (875 joints) is still unbound and unanimated.**
+     The combined body carries the face GEOMETRY on the body's 342 joints, so the
+     face is skinned and lit and does not blink, speak or emote. FACE1's.
+105. **The imported ORM is uncompressed** — 25 758 080 B for a 2048² map against
+     the albedo's 3 229 952 — because `TextureImportSettings::data()` keeps all
+     eight bits of every channel. Pre-existing (every Megascans ORM in the island
+     project is that byte count), and it is now on the PIE payload path for two
+     characters, which is 51 MB the payload did not carry before.
+106. **Neither MetaHuman has hair, and both wear the pipeline's default
+     underwear.** The assembly's grooms are strand data this bridge does not
+     cross; the garments are `MI_WI_DefaultGarment_*` slots on the face/body
+     meshes, which the combined mesh does not carry.

@@ -140,6 +140,14 @@ table.
 > destination inside this checkout outright, `ue-staging/` is in `.gitignore`,
 > and `char1a_gate::nothing_from_unreal_is_inside_the_checkout` walks the tree
 > looking for one that slipped past both doors.
+>
+> **And the licence is now on the ASSETS, not only here** (wave CHAR1a.3,
+> carried item 96). Every asset `inf-import` writes carries `licence`,
+> `licence_may_ship` and `licence_pack` in its sidecar, from the pack it actually
+> came from — measured on the island project: **441 of 441**, ALS 126 (may ship),
+> MetaHumans 215 (may ship), the mannequins 78 (**LOCAL ONLY**), and 22 that a
+> two-pack run cannot attribute, recorded at the conservative position. A licence
+> that lives only in a README is a licence nobody finds next to the bytes.
 
 **The order matters and there is only one that works:**
 
