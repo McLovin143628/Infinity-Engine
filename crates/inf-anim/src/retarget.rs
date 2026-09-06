@@ -720,7 +720,7 @@ pub fn settle_to_ground(clip: &mut crate::clip::AnimClip, dst: &Skeleton) -> f32
     };
     let mut min_y = f32::INFINITY;
     for i in 0..GROUND_SAMPLES {
-        let t = clip.duration as f32 * i as f32 / GROUND_SAMPLES as f32;
+        let t = clip.duration * i as f32 / GROUND_SAMPLES as f32;
         let pose = crate::sample_clip(dst, clip, t, true);
         if let Some(y) = lowest_ground_joint(dst, &pose) {
             min_y = min_y.min(y);
@@ -817,7 +817,7 @@ pub fn settle_to_ground_with_skin(
     let bind_low = lowest(&crate::pose::Pose::rest(dst));
     let mut min_y = f32::INFINITY;
     for i in 0..GROUND_SAMPLES {
-        let t = clip.duration as f32 * i as f32 / GROUND_SAMPLES as f32;
+        let t = clip.duration * i as f32 / GROUND_SAMPLES as f32;
         min_y = min_y.min(lowest(&crate::sample_clip(dst, clip, t, true)));
     }
     if !min_y.is_finite() || !bind_low.is_finite() {

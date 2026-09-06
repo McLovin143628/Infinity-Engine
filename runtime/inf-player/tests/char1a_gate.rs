@@ -1392,7 +1392,7 @@ fn a_committed_bodys_soles_rest_on_the_ground_plane() {
             let cl: inf_anim::AnimClipAsset = inf_asset::decode(&rd(c)).expect("clip decodes");
             let mut lowest = f32::INFINITY;
             for i in 0..=20 {
-                let t = cl.clip.duration as f32 * i as f32 / 20.0;
+                let t = cl.clip.duration * i as f32 / 20.0;
                 let pose = inf_anim::sample_clip(&sk.skeleton, &cl.clip, t, true);
                 let pal = inf_anim::skinning_matrices(&sk.skeleton, &pose);
                 lowest = lowest.min(lowest_skinned_y(&sd, &pal));
@@ -1477,7 +1477,7 @@ fn a_retargeted_clip_is_settled_onto_the_target_rigs_ground_plane() {
     let bind_low = lowest_ground_joint_y(&dst, &rest);
     let mut lowest = f32::INFINITY;
     for i in 0..=20 {
-        let t = out.duration as f32 * i as f32 / 20.0;
+        let t = out.duration * i as f32 / 20.0;
         let pose = inf_anim::sample_clip(&dst, &out, t, true);
         lowest = lowest.min(lowest_ground_joint_y(&dst, &pose));
     }
